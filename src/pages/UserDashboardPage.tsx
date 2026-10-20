@@ -31,7 +31,7 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
   onSelectCreator,
   onSelectBundle,
 }) => {
-  const { user, updateProfile, openDepositModal, refreshUser, openCreatorApplyModal, creatorProfile } = useAuth();
+  const { user, updateProfile, openDepositModal, refreshUser, openCreatorApplyModal, creatorProfile, openAuthModal } = useAuth();
   const [activeTab, setActiveTab] = useState<'library' | 'wallet' | 'rewards' | 'creators' | 'notifications' | 'profile'>('library');
   const [libraryData, setLibraryData] = useState<any>(null);
   const [rewards, setRewards] = useState<Reward[]>([]);
@@ -120,6 +120,24 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
   const unlockedBundles: EpisodeBundle[] = libraryData?.bundles || [];
   const transactions: WalletTransaction[] = libraryData?.transactions || [];
   const followedCreators: CreatorProfile[] = libraryData?.followed_creators || [];
+
+  if (!user) {
+    return (
+      <div className="py-20 text-center max-w-md mx-auto space-y-4 bg-[#0d121d] border border-slate-800 rounded-3xl p-8">
+        <FolderLock className="w-12 h-12 text-cyan-400 mx-auto" />
+        <h2 className="text-xl font-bold text-white">Sign In to Access Your Library</h2>
+        <p className="text-xs text-slate-400">
+          Track your unlocked Nollywood blockbusters, 10-episode series passes, wallet transactions, and profile settings.
+        </p>
+        <button
+          onClick={() => openAuthModal('login')}
+          className="py-2.5 px-6 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 text-white font-bold rounded-xl text-xs shadow-lg shadow-cyan-500/20 transition-all"
+        >
+          Sign In to VisPlay
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8 pb-16">

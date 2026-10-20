@@ -273,38 +273,11 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
         return;
       }
 
-      // Check if metadata is loaded (video.readyState >= 1)
+      // Ensure metadata is loaded (video.readyState >= 1) before requesting PiP
       if (video.readyState < 1) {
-        await new Promise<void>((resolve, reject) => {
-          const timeout = setTimeout(() => {
-            cleanup();
-            resolve();
-          }, 2000);
-
-          const onMeta = () => {
-            cleanup();
-            setIsVideoReady(true);
-            resolve();
-          };
-
-          const onError = () => {
-            cleanup();
-            reject(new Error('Video stream metadata not available yet'));
-          };
-
-          const cleanup = () => {
-            clearTimeout(timeout);
-            video.removeEventListener('loadedmetadata', onMeta);
-            video.removeEventListener('canplay', onMeta);
-            video.removeEventListener('error', onError);
-          };
-
-          video.addEventListener('loadedmetadata', onMeta);
-          video.addEventListener('canplay', onMeta);
-          video.addEventListener('error', onError);
-
-          video.load();
-        });
+        setPipNotice('Video is still loading. Please start video playback before enabling Picture-in-Picture.');
+        setTimeout(() => setPipNotice(null), 3500);
+        return;
       }
 
       await video.requestPictureInPicture();

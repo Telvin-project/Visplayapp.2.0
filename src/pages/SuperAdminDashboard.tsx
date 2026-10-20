@@ -36,6 +36,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onSele
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [usersList, setUsersList] = useState<any[]>([]);
   const [payouts, setPayouts] = useState<any[]>([]);
+  const [featuredMovieId, setFeaturedMovieId] = useState<string | null>(null);
   
   const [activeTab, setActiveTab] = useState<'overview' | 'applications' | 'moderation' | 'all_movies' | 'transactions' | 'payouts' | 'users' | 'audit'>('overview');
   const [loading, setLoading] = useState(true);
@@ -51,7 +52,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onSele
   const fetchAdminData = async () => {
     try {
       setLoading(true);
-      const [mRes, appRes, movRes, txRes, audRes, usrRes, payRes] = await Promise.all([
+      const [mRes, appRes, movRes, txRes, audRes, usrRes, payRes, featRes] = await Promise.all([
         fetch('/api/admin/metrics'),
         fetch('/api/admin/creator-applications'),
         fetch('/api/admin/movies'),
@@ -59,7 +60,13 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onSele
         fetch('/api/admin/audit-logs'),
         fetch('/api/admin/users'),
         fetch('/api/admin/payouts'),
+        fetch('/api/movies/featured'),
       ]);
+
+      if (featRes.ok) {
+        const featData = await featRes.json();
+        setFeaturedMovieId(featData.movie?.id || null);
+      }
 
       if (mRes.ok) {
         const data = await mRes.json();
@@ -150,6 +157,28 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onSele
       }
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const handleSetFeaturedMovie = async (movieId: string | null) => {
+    try {
+      const res = await fetch('/api/admin/featured-movie', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ movie_id: movieId }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setFeaturedMovieId(movieId);
+        confetti({ particleCount: 35, spread: 60 });
+        setActionSuccess(movieId ? `Homepage Spotlight Hero set to "${data.message || 'selected film'}"` : 'Featured hero reset to automatic top-ranking.');
+        setTimeout(() => setActionSuccess(null), 3500);
+        fetchAdminData();
+      } else {
+        alert(data.error || 'Failed to update featured movie.');
+      }
+    } catch (e) {
+      console.error('Error updating featured movie:', e);
     }
   };
 

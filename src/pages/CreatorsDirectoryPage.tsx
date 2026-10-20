@@ -21,11 +21,10 @@ export const CreatorsDirectoryPage: React.FC<CreatorsDirectoryPageProps> = ({
   const fetchCreators = async () => {
     try {
       setLoading(true);
-      const res = await fetch('/api/admin/creator-applications');
+      const res = await fetch('/api/creators');
       if (res.ok) {
         const data = await res.json();
-        // Show approved creators
-        setCreators(data.applications.filter((a: CreatorProfile) => a.status === 'approved'));
+        setCreators(data.creators || []);
       }
     } catch (e) {
       console.error(e);

@@ -245,6 +245,8 @@ export interface DatabaseSchema {
   ads: AdCampaign[];
   audit_logs: AuditLog[];
   notifications: Notification[];
+  featured_movie_id?: string | null;
+  featured_movie_backdrop?: string | null;
 }
 
 const DB_FILE = path.join(process.cwd(), 'data', 'visplay_db.json');
@@ -262,6 +264,44 @@ export function loadDatabase(): DatabaseSchema {
     try {
       const content = fs.readFileSync(DB_FILE, 'utf-8');
       dbCache = JSON.parse(content);
+      
+      // Ensure featured_movie_id exists
+      if (!dbCache!.featured_movie_id && dbCache!.featured_movie_id !== null) {
+        dbCache!.featured_movie_id = 'mov_lagos_syndicate';
+      }
+
+      // Merge any new seed movies if missing
+      const initial = getInitialSeed();
+      let changed = false;
+      for (const m of initial.movies) {
+        if (!dbCache!.movies.some(existing => existing.id === m.id)) {
+          dbCache!.movies.push(m);
+          changed = true;
+        }
+      }
+
+      // Ensure all registered or seed Super Admin emails have role='admin'
+      for (const email of SUPER_ADMIN_EMAILS) {
+        const existing = dbCache!.users.find(u => u.email.toLowerCase() === email.toLowerCase());
+        if (existing) {
+          if (existing.role !== 'admin') {
+            existing.role = 'admin';
+            changed = true;
+          }
+        } else {
+          // Provision Super Admin user if not yet in database
+          const seedUser = initial.users.find(u => u.email.toLowerCase() === email.toLowerCase());
+          if (seedUser) {
+            dbCache!.users.unshift({ ...seedUser });
+            changed = true;
+          }
+        }
+      }
+
+      if (changed) {
+        saveDatabase(dbCache!);
+      }
+
       return dbCache!;
     } catch (e) {
       console.error('Error parsing DB_FILE, reinitializing:', e);
@@ -279,11 +319,28 @@ export function saveDatabase(data: DatabaseSchema): void {
   fs.renameSync(tempPath, DB_FILE);
 }
 
+export const SUPER_ADMIN_EMAILS = [
+  'usitakatelvin@gmail.com',
+  'talk2visibyl@gmail.com',
+];
+
 function getInitialSeed(): DatabaseSchema {
   const salt = bcrypt.genSaltSync(10);
   const adminPass = bcrypt.hashSync('admin123', salt);
   const creatorPass = bcrypt.hashSync('creator123', salt);
   const viewerPass = bcrypt.hashSync('viewer123', salt);
+
+  const superAdminTelvin: User = {
+    id: 'user_admin_telvin',
+    email: 'usitakatelvin@gmail.com',
+    password_hash: adminPass,
+    full_name: 'Kelvin Usitaka',
+    avatar_url: '/visplay-symbol.png',
+    role: 'admin',
+    wallet_balance: 50000,
+    phone: '+2348012345678',
+    created_at: new Date('2026-01-01T00:00:00Z').toISOString(),
+  };
 
   const adminUser: User = {
     id: 'user_admin_01',
@@ -476,6 +533,138 @@ function getInitialSeed(): DatabaseSchema {
     created_at: new Date('2026-02-12T00:00:00Z').toISOString(),
   };
 
+  const movie5: Movie = {
+    id: 'mov_oga_landlord',
+    creator_id: creatorProfile3.id,
+    creator_name: creatorProfile3.channel_name,
+    creator_avatar: creatorProfile3.channel_avatar_url,
+    title: 'Oga Landlord in Lekki',
+    synopsis: 'A cunning real estate mogul finds himself in hot water when he rents the same luxury Lekki penthouse to three eccentric Nigerian families on the same weekend.',
+    genre: 'Comedy',
+    release_year: 2025,
+    duration_seconds: 5520, // 1h 32m
+    poster_url: '/posters/sunset_elegushi.jpg',
+    backdrop_url: '/posters/sunset_elegushi.jpg',
+    video_url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4',
+    is_bundle_only: false,
+    status: 'published',
+    views_count: 2210,
+    paid_unlocks_count: 512,
+    price_ngn: 100,
+    free_preview_seconds: 300,
+    created_at: new Date('2026-02-14T00:00:00Z').toISOString(),
+  };
+
+  const movie6: Movie = {
+    id: 'mov_whispers_shrine',
+    creator_id: creatorProfile2.id,
+    creator_name: creatorProfile2.channel_name,
+    creator_avatar: creatorProfile2.channel_avatar_url,
+    title: 'Whispers of the Ancient Shrine',
+    synopsis: 'When an archaeological excavation unearths a sacred relic in Edo state, paranormal events grip a quiet university town as ancient spirits demand their stolen tribute.',
+    genre: 'Horror',
+    release_year: 2024,
+    duration_seconds: 6120, // 1h 42m
+    poster_url: '/posters/royal_throne.jpg',
+    backdrop_url: '/posters/royal_throne.jpg',
+    video_url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4',
+    is_bundle_only: false,
+    status: 'published',
+    views_count: 890,
+    paid_unlocks_count: 175,
+    price_ngn: 100,
+    free_preview_seconds: 300,
+    created_at: new Date('2026-01-28T00:00:00Z').toISOString(),
+  };
+
+  const movie7: Movie = {
+    id: 'mov_river_echoes',
+    creator_id: creatorProfile2.id,
+    creator_name: creatorProfile2.channel_name,
+    creator_avatar: creatorProfile2.channel_avatar_url,
+    title: 'Echoes of the River Niger',
+    synopsis: 'A heartfelt Nollywood family chronicle following three generations navigating cultural traditions, modern education, and oil rights across the Niger Delta.',
+    genre: 'Drama',
+    release_year: 2024,
+    duration_seconds: 6720, // 1h 52m
+    poster_url: '/posters/royal_throne.jpg',
+    backdrop_url: '/posters/royal_throne.jpg',
+    video_url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4',
+    is_bundle_only: false,
+    status: 'published',
+    views_count: 1150,
+    paid_unlocks_count: 280,
+    price_ngn: 100,
+    free_preview_seconds: 300,
+    created_at: new Date('2026-01-22T00:00:00Z').toISOString(),
+  };
+
+  const movie8: Movie = {
+    id: 'mov_lost_hills',
+    creator_id: creatorProfile1.id,
+    creator_name: creatorProfile1.channel_name,
+    creator_avatar: creatorProfile1.channel_avatar_url,
+    title: 'Expedition: The Lost Hills of Obudu',
+    synopsis: 'An ambitious wildlife biologist and her documentary team trek through the highlands of Cross River State to locate a legendary mountain sanctuary before poachers strike.',
+    genre: 'Adventure',
+    release_year: 2025,
+    duration_seconds: 5940, // 1h 39m
+    poster_url: '/posters/lagos_heist.jpg',
+    backdrop_url: '/posters/lagos_heist.jpg',
+    video_url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+    is_bundle_only: false,
+    status: 'published',
+    views_count: 940,
+    paid_unlocks_count: 195,
+    price_ngn: 100,
+    free_preview_seconds: 300,
+    created_at: new Date('2026-02-18T00:00:00Z').toISOString(),
+  };
+
+  const movie9: Movie = {
+    id: 'mov_accra_connection',
+    creator_id: creatorProfile1.id,
+    creator_name: creatorProfile1.channel_name,
+    creator_avatar: creatorProfile1.channel_avatar_url,
+    title: 'The Accra-Lagos Connection',
+    synopsis: 'A high-octane cross-border thriller as Ghanaian customs and Nigerian narcotics police join forces to bust an international gold and tech smuggling syndicate.',
+    genre: 'Action',
+    release_year: 2025,
+    duration_seconds: 6360, // 1h 46m
+    poster_url: '/posters/abuja_cipher.jpg',
+    backdrop_url: '/posters/abuja_cipher.jpg',
+    video_url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4',
+    is_bundle_only: false,
+    status: 'published',
+    views_count: 1670,
+    paid_unlocks_count: 388,
+    price_ngn: 100,
+    free_preview_seconds: 300,
+    created_at: new Date('2026-02-08T00:00:00Z').toISOString(),
+  };
+
+  const movie10: Movie = {
+    id: 'mov_hearts_zaria',
+    creator_id: creatorProfile3.id,
+    creator_name: creatorProfile3.channel_name,
+    creator_avatar: creatorProfile3.channel_avatar_url,
+    title: 'Hearts of Zaria',
+    synopsis: 'An evocative romance between a modern fintech architect and a traditional textile artisan against the breathtaking ancient city gates of Northern Nigeria.',
+    genre: 'Romance',
+    release_year: 2024,
+    duration_seconds: 6060, // 1h 41m
+    poster_url: '/posters/sunset_elegushi.jpg',
+    backdrop_url: '/posters/sunset_elegushi.jpg',
+    video_url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4',
+    is_bundle_only: false,
+    status: 'published',
+    views_count: 1320,
+    paid_unlocks_count: 290,
+    price_ngn: 100,
+    free_preview_seconds: 300,
+    created_at: new Date('2026-01-30T00:00:00Z').toISOString(),
+  };
+
   // 10-episode bundle
   const bundle1: EpisodeBundle = {
     id: 'bundle_lagos_underground',
@@ -593,9 +782,9 @@ function getInitialSeed(): DatabaseSchema {
   ];
 
   return {
-    users: [adminUser, creatorUser1, creatorUser2, creatorUser3, viewerUser],
+    users: [superAdminTelvin, adminUser, creatorUser1, creatorUser2, creatorUser3, viewerUser],
     creator_profiles: [creatorProfile1, creatorProfile2, creatorProfile3],
-    movies: [movie1, movie2, movie3, movie4, ...bundleEpisodes],
+    movies: [movie1, movie2, movie3, movie4, movie5, movie6, movie7, movie8, movie9, movie10, ...bundleEpisodes],
     bundles: [bundle1],
     transactions: [
       {
@@ -720,5 +909,7 @@ function getInitialSeed(): DatabaseSchema {
         created_at: new Date().toISOString(),
       }
     ],
+    featured_movie_id: 'mov_lagos_syndicate',
+    featured_movie_backdrop: null,
   };
 }

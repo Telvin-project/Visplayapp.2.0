@@ -27,6 +27,7 @@ import {
   AdCampaign,
   AuditLog,
   Notification,
+  SUPER_ADMIN_EMAILS,
 } from './server/db.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'visplay-super-secure-jwt-secret-nollywood-2026';
@@ -207,6 +208,66 @@ async function startServer() {
     res.json({ user: safeUser, token });
   });
 
+  // Supabase Auth Synchronization (Google OAuth & Supabase session sync)
+  app.post('/api/auth/supabase-sync', (req: Request, res: Response) => {
+    const { email, full_name, avatar_url } = req.body;
+    if (!email) {
+      res.status(400).json({ error: 'Email is required for Supabase authentication synchronization.' });
+      return;
+    }
+
+    const cleanEmail = email.toLowerCase().trim();
+    const db = loadDatabase();
+    let user = db.users.find(u => u.email.toLowerCase() === cleanEmail);
+    const isSuperAdmin = SUPER_ADMIN_EMAILS.some(e => e.toLowerCase() === cleanEmail);
+
+    if (!user) {
+      // Create new user profile for this Supabase/Google authenticated user
+      const role = isSuperAdmin ? 'admin' : 'viewer';
+
+      user = {
+        id: `usr_${uuidv4().substring(0, 8)}`,
+        email: cleanEmail,
+        password_hash: '', // Handled via Supabase OAuth
+        full_name: full_name?.trim() || cleanEmail.split('@')[0],
+        avatar_url: avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(cleanEmail)}`,
+        role: role,
+        wallet_balance: isSuperAdmin ? 50000 : 500, // Welcome ₦500 bonus coins for new viewers (50k for super admin)
+        phone: '',
+        created_at: new Date().toISOString(),
+      };
+      db.users.push(user);
+    } else {
+      // Existing user: ensure super admin role cannot be lost or tampered with
+      if (isSuperAdmin) {
+        user.role = 'admin';
+      }
+      if (full_name && !user.full_name) user.full_name = full_name.trim();
+      if (avatar_url && (!user.avatar_url || user.avatar_url.includes('dicebear'))) {
+        user.avatar_url = avatar_url;
+      }
+    }
+
+    // Check creator status
+    const creatorProfile = db.creator_profiles.find(cp => cp.user_id === user!.id);
+    if (creatorProfile && creatorProfile.status === 'approved' && user.role !== 'admin') {
+      user.role = 'creator';
+    }
+
+    saveDatabase(db);
+
+    const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
+    res.cookie('visplay_token', token, {
+      httpOnly: true,
+      secure: isProd,
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    const { password_hash: _, ...safeUser } = user;
+    res.json({ user: safeUser, creator_profile: creatorProfile || null, token });
+  });
+
   app.get('/api/auth/me', (req: AuthenticatedRequest, res: Response) => {
     if (!req.user) {
       res.json({ user: null });
@@ -343,6 +404,22 @@ async function startServer() {
     });
   });
 
+  // Public directory of approved creators
+  app.get('/api/creators', (req: Request, res: Response) => {
+    const db = loadDatabase();
+    const approved = db.creator_profiles.filter(cp => cp.status === 'approved');
+    const creatorsWithStats = approved.map(cp => {
+      const moviesCount = db.movies.filter(m => m.creator_id === cp.id && m.status === 'published').length;
+      const followersCount = db.follows.filter(f => f.creator_user_id === cp.id).length;
+      return {
+        ...cp,
+        movies_count: moviesCount,
+        followers_count: followersCount,
+      };
+    });
+    res.json({ creators: creatorsWithStats });
+  });
+
   app.get('/api/creators/channel/:id', (req: Request, res: Response) => {
     const db = loadDatabase();
     const profile = db.creator_profiles.find(cp => cp.id === req.params.id);
@@ -425,6 +502,141 @@ async function startServer() {
     }));
 
     res.json({ movies: enhanced, total: enhanced.length });
+  });
+
+  // Public Dynamic Featured Movie (controlled from Super Admin)
+  app.get('/api/movies/featured', (req: AuthenticatedRequest, res: Response) => {
+    const db = loadDatabase();
+    let movie: Movie | undefined;
+    if (db.featured_movie_id) {
+      movie = db.movies.find(m => m.id === db.featured_movie_id && m.status === 'published');
+    }
+    // Fallback if not configured or removed
+    if (!movie) {
+      movie = db.movies.find(m => m.id === 'mov_lagos_syndicate') || db.movies.find(m => m.status === 'published' && !m.is_bundle_only);
+    }
+
+    if (!movie) {
+      res.status(404).json({ error: 'No published movies available for hero feature.' });
+      return;
+    }
+
+    const creator = db.creator_profiles.find(cp => cp.id === movie!.creator_id);
+    const isPurchased = req.user
+      ? db.purchases.some(p => p.user_id === req.user!.id && (p.item_id === movie!.id || (movie!.bundle_id && p.item_id === movie!.bundle_id))) ||
+        req.user.role === 'admin'
+      : false;
+
+    res.json({
+      movie: {
+        ...movie,
+        is_purchased: isPurchased,
+      },
+      creator: creator || null,
+      custom_backdrop: db.featured_movie_backdrop || null,
+      is_custom_selected: Boolean(db.featured_movie_id),
+    });
+  });
+
+  // Super Admin: Set Featured Spotlight Movie for Homepage
+  app.post('/api/admin/featured-movie', requireAdmin, (req: AuthenticatedRequest, res: Response) => {
+    const { movie_id, custom_backdrop } = req.body;
+    const db = loadDatabase();
+
+    if (!movie_id) {
+      db.featured_movie_id = undefined;
+      db.featured_movie_backdrop = undefined;
+      saveDatabase(db);
+      res.json({ success: true, message: 'Featured spotlight reset to automatic' });
+      return;
+    }
+
+    const movie = db.movies.find(m => m.id === movie_id);
+    if (!movie) {
+      res.status(404).json({ error: 'Movie not found.' });
+      return;
+    }
+
+    db.featured_movie_id = movie.id;
+    if (custom_backdrop !== undefined) {
+      db.featured_movie_backdrop = custom_backdrop || undefined;
+    }
+    saveDatabase(db);
+
+    // Audit log
+    db.audit_logs.push({
+      id: `aud_${uuidv4().substring(0, 8)}`,
+      admin_id: req.user!.id,
+      admin_name: req.user!.full_name,
+      action: 'UPDATE_FEATURED_HERO_MOVIE',
+      target_type: 'movie',
+      target_id: movie.id,
+      details: `Featured spotlight updated to: "${movie.title}"`,
+      ip_address: req.ip || '127.0.0.1',
+      created_at: new Date().toISOString(),
+    });
+    saveDatabase(db);
+
+    res.json({ success: true, message: `Featured hero movie set to "${movie.title}"`, featured_movie_id: movie.id });
+  });
+
+  // Curated Horizontal Categories
+  app.get('/api/movies/categories', (req: AuthenticatedRequest, res: Response) => {
+    const db = loadDatabase();
+    const published = db.movies.filter(m => m.status === 'published' && !m.is_bundle_only);
+    const userPurchases = req.user ? db.purchases.filter(p => p.user_id === req.user!.id).map(p => p.item_id) : [];
+
+    const enhance = (list: Movie[]) =>
+      list.map(m => ({
+        ...m,
+        is_purchased: userPurchases.includes(m.id) || (m.bundle_id && userPurchases.includes(m.bundle_id)),
+      }));
+
+    // Continue Watching from viewing events if user is authenticated
+    let continueWatching: Movie[] = [];
+    if (req.user) {
+      const userEvents = db.viewing_events
+        .filter(e => e.user_id === req.user!.id)
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      const recentMovieIds = Array.from(new Set(userEvents.map(e => e.movie_id)));
+      continueWatching = enhance(db.movies.filter(m => recentMovieIds.includes(m.id)).slice(0, 8));
+    }
+
+    const trending = enhance([...published].sort((a, b) => b.views_count - a.views_count));
+    const popular = enhance([...published].sort((a, b) => b.paid_unlocks_count - a.paid_unlocks_count));
+    const latest = enhance([...published].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()));
+
+    const nollywood = enhance(published.filter(m => m.genre.includes('Action') || m.genre.includes('Historical') || m.genre.includes('Comedy')));
+    const comedy = enhance(published.filter(m => m.genre.toLowerCase().includes('comedy')));
+    const action = enhance(published.filter(m => m.genre.toLowerCase().includes('action')));
+    const romance = enhance(published.filter(m => m.genre.toLowerCase().includes('romance')));
+    const drama = enhance(published.filter(m => m.genre.toLowerCase().includes('drama')));
+    const thriller = enhance(published.filter(m => m.genre.toLowerCase().includes('thriller') || m.genre.toLowerCase().includes('sci-fi')));
+    const horror = enhance(published.filter(m => m.genre.toLowerCase().includes('horror')));
+    const adventure = enhance(published.filter(m => m.genre.toLowerCase().includes('adventure') || m.genre.toLowerCase().includes('family')));
+
+    // 10-episode series bundles
+    const bundles = db.bundles.map(b => ({
+      ...b,
+      episodes: db.movies.filter(m => m.bundle_id === b.id),
+      is_purchased: userPurchases.includes(b.id),
+    }));
+
+    res.json({
+      continue_watching: continueWatching,
+      trending,
+      popular,
+      latest,
+      nollywood,
+      action,
+      romance,
+      drama,
+      comedy,
+      thriller,
+      horror,
+      adventure,
+      series: bundles,
+    });
   });
 
   app.get('/api/movies/:id', (req: AuthenticatedRequest, res: Response) => {

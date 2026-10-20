@@ -1,32 +1,82 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { X, Lock, Mail, User as UserIcon, Phone, ShieldCheck, Sparkles, AlertCircle } from 'lucide-react';
+import {
+  X,
+  Lock,
+  Mail,
+  User as UserIcon,
+  Phone,
+  ShieldCheck,
+  Sparkles,
+  AlertCircle,
+  Settings,
+  CheckCircle2,
+  Loader2,
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react';
 
 export const AuthModal: React.FC = () => {
-  const { authModalOpen, authModalMode, closeAuthModal, openAuthModal, login, register } = useAuth();
+  const {
+    authModalOpen,
+    authModalMode,
+    closeAuthModal,
+    openAuthModal,
+    login,
+    loginWithGoogle,
+    register,
+    authLoading,
+    isSupabaseActive,
+    configureSupabase,
+    resetSupabaseConfig,
+    supabaseConfig,
+  } = useAuth();
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+  const [localSubmitting, setLocalSubmitting] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
+
+  // Supabase inline settings toggle
+  const [showConfig, setShowConfig] = useState(false);
+  const [configUrl, setConfigUrl] = useState(supabaseConfig.url || '');
+  const [configKey, setConfigKey] = useState(supabaseConfig.anonKey || '');
+  const [configSavedNotice, setConfigSavedNotice] = useState<string | null>(null);
 
   if (!authModalOpen) return null;
+
+  const submitting = localSubmitting || authLoading;
+
+  const handleGoogleSignIn = async () => {
+    setError(null);
+    setGoogleLoading(true);
+    const res = await loginWithGoogle();
+    if (!res.success) {
+      setError(res.error || 'Google sign-in could not be completed.');
+      if (!isSupabaseActive) {
+        setShowConfig(true);
+      }
+    }
+    setGoogleLoading(false);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    setSubmitting(true);
+    setLocalSubmitting(true);
 
     if (authModalMode === 'login') {
       const res = await login(email, password);
       if (!res.success) {
-        setError(res.error || 'Failed to sign in. Please verify your credentials.');
+        setError(res.error || 'Failed to sign in. Please verify your email and password.');
       }
     } else {
-      if (!fullName) {
+      if (!fullName.trim()) {
         setError('Please enter your full name.');
-        setSubmitting(false);
+        setLocalSubmitting(false);
         return;
       }
       const res = await register(email, password, fullName, phone);
@@ -34,24 +84,44 @@ export const AuthModal: React.FC = () => {
         setError(res.error || 'Registration failed. Try again.');
       }
     }
-    setSubmitting(false);
+    setLocalSubmitting(false);
   };
 
   const handleQuickDemoLogin = async (demoEmail: string, demoPass: string) => {
     setEmail(demoEmail);
     setPassword(demoPass);
     setError(null);
-    setSubmitting(true);
+    setLocalSubmitting(true);
     const res = await login(demoEmail, demoPass);
     if (!res.success) {
       setError(res.error || 'Quick login failed');
     }
-    setSubmitting(false);
+    setLocalSubmitting(false);
+  };
+
+  const handleSaveConfig = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!configUrl.trim() || !configKey.trim()) {
+      setError('Please provide both Supabase URL and Anon Key.');
+      return;
+    }
+    if (!configUrl.startsWith('https://')) {
+      setError('Supabase URL must start with https://');
+      return;
+    }
+    const success = configureSupabase(configUrl, configKey);
+    if (success) {
+      setConfigSavedNotice('Supabase credentials connected successfully!');
+      setError(null);
+      setTimeout(() => setConfigSavedNotice(null), 3500);
+    } else {
+      setError('Invalid Supabase URL or Key format.');
+    }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="relative w-full max-w-md bg-[#0d121d] border border-slate-800 rounded-3xl p-6 md:p-8 shadow-2xl text-slate-100">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200 overflow-y-auto">
+      <div className="relative w-full max-w-md my-8 bg-[#0d121d] border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl text-slate-100">
         {/* Close Button */}
         <button
           onClick={closeAuthModal}
@@ -67,8 +137,114 @@ export const AuthModal: React.FC = () => {
           <p className="text-xs text-slate-400 font-medium">Great Movies. Small Coins. Big Entertainment.</p>
         </div>
 
+        {/* Supabase Status Pill */}
+        <div className="mb-4 flex items-center justify-between px-3 py-1.5 bg-slate-900/80 border border-slate-800/90 rounded-xl text-[11px]">
+          <div className="flex items-center gap-1.5">
+            <span className={`w-2 h-2 rounded-full ${isSupabaseActive ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+            <span className="text-slate-300 font-medium">
+              {isSupabaseActive ? 'Supabase Auth Connected' : 'Supabase Auth Ready for Config'}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowConfig(!showConfig)}
+            className="text-cyan-400 hover:text-cyan-300 flex items-center gap-1 font-semibold"
+          >
+            <Settings className="w-3.5 h-3.5" />
+            <span>{showConfig ? 'Hide' : 'Settings'}</span>
+          </button>
+        </div>
+
+        {/* Inline Supabase Config Drawer */}
+        {showConfig && (
+          <form onSubmit={handleSaveConfig} className="mb-5 p-3.5 bg-slate-900 border border-cyan-900/40 rounded-2xl text-xs space-y-2.5">
+            <div className="flex items-center justify-between text-cyan-300 font-semibold">
+              <span>Supabase Project Settings</span>
+              <button
+                type="button"
+                onClick={resetSupabaseConfig}
+                className="text-[10px] text-slate-400 hover:text-rose-400 underline"
+              >
+                Reset
+              </button>
+            </div>
+            <p className="text-[11px] text-slate-400">
+              Enter your Supabase URL & Anon Key for live Google OAuth & Auth sync.
+            </p>
+            <input
+              type="text"
+              value={configUrl}
+              onChange={(e) => setConfigUrl(e.target.value)}
+              placeholder="https://xyzcompany.supabase.co"
+              className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500"
+            />
+            <input
+              type="text"
+              value={configKey}
+              onChange={(e) => setConfigKey(e.target.value)}
+              placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+              className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 font-mono text-[10px]"
+            />
+            <button
+              type="submit"
+              className="w-full py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg font-semibold text-xs transition-colors"
+            >
+              Save & Activate Supabase
+            </button>
+            {configSavedNotice && (
+              <p className="text-[11px] text-emerald-400 font-medium text-center flex items-center justify-center gap-1">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>{configSavedNotice}</span>
+              </p>
+            )}
+          </form>
+        )}
+
+        {/* GOOGLE SIGN-IN BUTTON */}
+        <div className="mb-5">
+          <button
+            type="button"
+            onClick={handleGoogleSignIn}
+            disabled={googleLoading || submitting}
+            className="w-full py-2.5 px-4 bg-white hover:bg-slate-100 text-slate-900 rounded-xl font-semibold text-xs sm:text-sm flex items-center justify-center gap-3 shadow-md hover:shadow-lg transition-all active:scale-[0.99] disabled:opacity-60"
+          >
+            {googleLoading ? (
+              <Loader2 className="w-4 h-4 animate-spin text-slate-700" />
+            ) : (
+              <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                <path
+                  fill="#4285F4"
+                  d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                />
+                <path
+                  fill="#34A853"
+                  d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                />
+                <path
+                  fill="#FBBC05"
+                  d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                />
+                <path
+                  fill="#EA4335"
+                  d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                />
+              </svg>
+            )}
+            <span>{googleLoading ? 'Connecting to Google OAuth...' : 'Continue with Google'}</span>
+          </button>
+        </div>
+
+        {/* Divider */}
+        <div className="relative flex items-center justify-center mb-5">
+          <div className="border-t border-slate-800 w-full" />
+          <span className="bg-[#0d121d] px-3 text-[10px] font-semibold tracking-wider text-slate-500 uppercase">
+            Or with email
+          </span>
+          <div className="border-t border-slate-800 w-full" />
+        </div>
+
         {/* Tab switch */}
-        <div className="flex p-1 bg-slate-900/80 rounded-xl mb-6 border border-slate-800">
+        <div className="flex p-1 bg-slate-900/80 rounded-xl mb-5 border border-slate-800">
           <button
             type="button"
             onClick={() => { setError(null); openAuthModal('login'); }}
@@ -166,9 +342,18 @@ export const AuthModal: React.FC = () => {
           <button
             type="submit"
             disabled={submitting}
-            className="w-full mt-2 py-3 px-4 rounded-xl font-semibold text-sm bg-gradient-to-r from-cyan-500 via-blue-600 to-fuchsia-600 hover:from-cyan-400 hover:to-fuchsia-500 text-white shadow-lg shadow-cyan-500/20 active:scale-[0.98] transition-all disabled:opacity-50"
+            className="w-full mt-2 py-3 px-4 rounded-xl font-semibold text-sm bg-gradient-to-r from-cyan-500 via-blue-600 to-fuchsia-600 hover:from-cyan-400 hover:to-fuchsia-500 text-white shadow-lg shadow-cyan-500/20 active:scale-[0.98] transition-all disabled:opacity-50 flex items-center justify-center gap-2"
           >
-            {submitting ? 'Please wait...' : authModalMode === 'login' ? 'Sign In to VisPlay' : 'Join VisPlay & Start Watching'}
+            {submitting ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>Processing...</span>
+              </>
+            ) : authModalMode === 'login' ? (
+              'Sign In to VisPlay'
+            ) : (
+              'Join VisPlay & Start Watching'
+            )}
           </button>
         </form>
 
@@ -181,24 +366,27 @@ export const AuthModal: React.FC = () => {
           <div className="grid grid-cols-3 gap-2">
             <button
               type="button"
+              disabled={submitting}
               onClick={() => handleQuickDemoLogin('viewer@visplay.ng', 'viewer123')}
-              className="py-1.5 px-2 bg-slate-900/90 hover:bg-slate-800 border border-slate-800 rounded-lg text-[11px] font-medium text-cyan-300 hover:border-cyan-500/50 transition-all text-center"
+              className="py-1.5 px-2 bg-slate-900/90 hover:bg-slate-800 border border-slate-800 rounded-lg text-[11px] font-medium text-cyan-300 hover:border-cyan-500/50 transition-all text-center disabled:opacity-50"
             >
               👤 Viewer
               <span className="block text-[9px] text-slate-400">₦1,500 coins</span>
             </button>
             <button
               type="button"
+              disabled={submitting}
               onClick={() => handleQuickDemoLogin('kunle@nollywood.ng', 'creator123')}
-              className="py-1.5 px-2 bg-slate-900/90 hover:bg-slate-800 border border-slate-800 rounded-lg text-[11px] font-medium text-fuchsia-300 hover:border-fuchsia-500/50 transition-all text-center"
+              className="py-1.5 px-2 bg-slate-900/90 hover:bg-slate-800 border border-slate-800 rounded-lg text-[11px] font-medium text-fuchsia-300 hover:border-fuchsia-500/50 transition-all text-center disabled:opacity-50"
             >
               🎬 Creator
               <span className="block text-[9px] text-slate-400">Studio & Movies</span>
             </button>
             <button
               type="button"
+              disabled={submitting}
               onClick={() => handleQuickDemoLogin('talk2visibyl@gmail.com', 'admin123')}
-              className="py-1.5 px-2 bg-slate-900/90 hover:bg-slate-800 border border-slate-800 rounded-lg text-[11px] font-medium text-amber-300 hover:border-amber-500/50 transition-all text-center"
+              className="py-1.5 px-2 bg-slate-900/90 hover:bg-slate-800 border border-slate-800 rounded-lg text-[11px] font-medium text-amber-300 hover:border-amber-500/50 transition-all text-center disabled:opacity-50"
             >
               🛡️ Super Admin
               <span className="block text-[9px] text-slate-400">Full Control</span>
