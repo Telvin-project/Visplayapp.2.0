@@ -1,0 +1,6 @@
+{
+  "name": "VisPlay — Nigerian Movie Streaming & Creator Marketplace",
+  "description": "Great Movies. Small Coins. Big Entertainment. Stream Nollywood and African blockbusters for ₦100 or subscribe to 10-episode bundles for ₦700 with an 85% creator revenue share.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
