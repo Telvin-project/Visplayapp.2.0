@@ -9,8 +9,6 @@ import {
   ShieldCheck,
   Sparkles,
   AlertCircle,
-  Settings,
-  CheckCircle2,
   Loader2,
   ChevronDown,
   ChevronUp,
@@ -26,10 +24,6 @@ export const AuthModal: React.FC = () => {
     loginWithGoogle,
     register,
     authLoading,
-    isSupabaseActive,
-    configureSupabase,
-    resetSupabaseConfig,
-    supabaseConfig,
   } = useAuth();
 
   const [email, setEmail] = useState('');
@@ -39,12 +33,6 @@ export const AuthModal: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [localSubmitting, setLocalSubmitting] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
-
-  // Supabase inline settings toggle
-  const [showConfig, setShowConfig] = useState(false);
-  const [configUrl, setConfigUrl] = useState(supabaseConfig.url || '');
-  const [configKey, setConfigKey] = useState(supabaseConfig.anonKey || '');
-  const [configSavedNotice, setConfigSavedNotice] = useState<string | null>(null);
 
   if (!authModalOpen) return null;
 
@@ -56,9 +44,6 @@ export const AuthModal: React.FC = () => {
     const res = await loginWithGoogle();
     if (!res.success) {
       setError(res.error || 'Google sign-in could not be completed.');
-      if (!isSupabaseActive) {
-        setShowConfig(true);
-      }
     }
     setGoogleLoading(false);
   };
@@ -99,26 +84,6 @@ export const AuthModal: React.FC = () => {
     setLocalSubmitting(false);
   };
 
-  const handleSaveConfig = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!configUrl.trim() || !configKey.trim()) {
-      setError('Please provide both Supabase URL and Anon Key.');
-      return;
-    }
-    if (!configUrl.startsWith('https://')) {
-      setError('Supabase URL must start with https://');
-      return;
-    }
-    const success = configureSupabase(configUrl, configKey);
-    if (success) {
-      setConfigSavedNotice('Supabase credentials connected successfully!');
-      setError(null);
-      setTimeout(() => setConfigSavedNotice(null), 3500);
-    } else {
-      setError('Invalid Supabase URL or Key format.');
-    }
-  };
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200 overflow-y-auto">
       <div className="relative w-full max-w-md my-8 bg-[#0d121d] border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl text-slate-100">
@@ -136,69 +101,6 @@ export const AuthModal: React.FC = () => {
           <img src="/visplay-logo.png" alt="VisPlay" className="h-10 mx-auto mb-2 object-contain" />
           <p className="text-xs text-slate-400 font-medium">Great Movies. Small Coins. Big Entertainment.</p>
         </div>
-
-        {/* Supabase Status Pill */}
-        <div className="mb-4 flex items-center justify-between px-3 py-1.5 bg-slate-900/80 border border-slate-800/90 rounded-xl text-[11px]">
-          <div className="flex items-center gap-1.5">
-            <span className={`w-2 h-2 rounded-full ${isSupabaseActive ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
-            <span className="text-slate-300 font-medium">
-              {isSupabaseActive ? 'Supabase Auth Connected' : 'Supabase Auth Ready for Config'}
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setShowConfig(!showConfig)}
-            className="text-cyan-400 hover:text-cyan-300 flex items-center gap-1 font-semibold"
-          >
-            <Settings className="w-3.5 h-3.5" />
-            <span>{showConfig ? 'Hide' : 'Settings'}</span>
-          </button>
-        </div>
-
-        {/* Inline Supabase Config Drawer */}
-        {showConfig && (
-          <form onSubmit={handleSaveConfig} className="mb-5 p-3.5 bg-slate-900 border border-cyan-900/40 rounded-2xl text-xs space-y-2.5">
-            <div className="flex items-center justify-between text-cyan-300 font-semibold">
-              <span>Supabase Project Settings</span>
-              <button
-                type="button"
-                onClick={resetSupabaseConfig}
-                className="text-[10px] text-slate-400 hover:text-rose-400 underline"
-              >
-                Reset
-              </button>
-            </div>
-            <p className="text-[11px] text-slate-400">
-              Enter your Supabase URL & Anon Key for live Google OAuth & Auth sync.
-            </p>
-            <input
-              type="text"
-              value={configUrl}
-              onChange={(e) => setConfigUrl(e.target.value)}
-              placeholder="https://xyzcompany.supabase.co"
-              className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500"
-            />
-            <input
-              type="text"
-              value={configKey}
-              onChange={(e) => setConfigKey(e.target.value)}
-              placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-              className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500 font-mono text-[10px]"
-            />
-            <button
-              type="submit"
-              className="w-full py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg font-semibold text-xs transition-colors"
-            >
-              Save & Activate Supabase
-            </button>
-            {configSavedNotice && (
-              <p className="text-[11px] text-emerald-400 font-medium text-center flex items-center justify-center gap-1">
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                <span>{configSavedNotice}</span>
-              </p>
-            )}
-          </form>
-        )}
 
         {/* GOOGLE SIGN-IN BUTTON */}
         <div className="mb-5">
