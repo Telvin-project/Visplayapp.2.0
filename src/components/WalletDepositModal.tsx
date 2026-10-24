@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { X, Coins, ShieldCheck, CheckCircle2, ArrowRight, CreditCard, Sparkles, AlertCircle } from 'lucide-react';
 import confetti from 'canvas-confetti';
@@ -10,6 +10,36 @@ export const WalletDepositModal: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Paystack redirects back with a transaction reference. Verify it server-side.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const reference = params.get('reference') || params.get('trxref');
+    if (!reference) return;
+    params.delete('reference');
+    params.delete('trxref');
+    const query = params.toString();
+    window.history.replaceState({}, '', window.location.pathname + (query ? `?${query}` : '') + window.location.hash);
+    (async () => {
+      try {
+        const response = await fetch('/api/wallet/deposit/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reference }),
+        });
+        const result = await response.json();
+        if (!response.ok || !result.success) {
+          setError(result.error || 'Payment has not been confirmed. If you paid, retry verification shortly.');
+          return;
+        }
+        await refreshUser();
+        setSuccessMessage('Your wallet deposit has been verified successfully.');
+        confetti({ particleCount: 60, spread: 60, origin: { y: 0.6 } });
+      } catch {
+        setError('We could not verify this payment right now. Please try again.');
+      }
+    })();
+  }, [refreshUser]);
 
   if (!depositModalOpen) return null;
 
@@ -24,47 +54,20 @@ export const WalletDepositModal: React.FC = () => {
     }
     setError(null);
     setSubmitting(true);
-
     try {
-      // 1. Initialize Paystack reference
       const initRes = await fetch('/api/wallet/deposit/initialize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ amount_ngn: effectiveAmount }),
       });
       const initData = await initRes.json();
-      if (!initRes.ok) {
-        throw new Error(initData.error || 'Failed to initialize deposit');
+      if (!initRes.ok || !initData.authorization_url) {
+        throw new Error(initData.error || 'Could not start Paystack checkout.');
       }
-
-      // 2. Complete payment verification via Paystack server-side reconciliation
-      const verifyRes = await fetch('/api/wallet/deposit/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reference: initData.reference }),
-      });
-      const verifyData = await verifyRes.json();
-      if (!verifyRes.ok) {
-        throw new Error(verifyData.error || 'Failed to verify payment with provider');
-      }
-
-      // Celebrate success
-      confetti({
-        particleCount: 60,
-        spread: 60,
-        origin: { y: 0.6 },
-        colors: ['#06b6d4', '#3b82f6', '#d946ef', '#10b981'],
-      });
-
-      await refreshUser();
-      setSuccessMessage(`₦${effectiveAmount.toLocaleString()} added to your VisPlay wallet!`);
-      setTimeout(() => {
-        setSuccessMessage(null);
-        closeDepositModal();
-      }, 1800);
+      // Navigate to Paystack. The callback reference is verified when the user returns.
+      window.location.assign(initData.authorization_url);
     } catch (err: any) {
-      setError(err.message || 'Payment processing failed. Try again.');
-    } finally {
+      setError(err.message || 'Payment processing failed. Please try again.');
       setSubmitting(false);
     }
   };
