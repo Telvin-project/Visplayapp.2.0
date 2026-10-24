@@ -26,7 +26,7 @@ interface CreatorStudioPageProps {
 }
 
 export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMovie }) => {
-  const { user, creatorProfile, openCreatorApplyModal } = useAuth();
+  const { user, creatorProfile, openCreatorApplyModal, loading: authLoading } = useAuth();
   const [channelData, setChannelData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'overview' | 'upload' | 'movies' | 'earnings' | 'livestream'>('overview');
@@ -52,8 +52,17 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
   const [liveMessage, setLiveMessage] = useState<string | null>(null);
 
   useEffect(() => {
+    // Wait for authentication to finish before deciding that a user has no creator
+    // profile. Otherwise a refresh can briefly show the application screen while
+    // the saved Supabase session and creator profile are still being restored.
+    if (authLoading) return;
+    if (!user) {
+      setChannelData(null);
+      setLoading(false);
+      return;
+    }
     fetchChannelData();
-  }, [user?.id]);
+  }, [user?.id, authLoading]);
 
   const fetchChannelData = async () => {
     try {
@@ -190,6 +199,16 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
       setSchedulingLive(false);
     }
   };
+
+  // Never show the application prompt while auth or the backend profile is still loading.
+  if (authLoading || loading) {
+    return (
+      <div className="py-20 text-center text-sm text-slate-400">
+        <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-slate-700 border-t-cyan-400" />
+        Restoring your creator studio…
+      </div>
+    );
+  }
 
   // Prefer the freshly fetched backend profile when available. This prevents
   // a stale/null auth-context profile from hiding an already-approved channel.

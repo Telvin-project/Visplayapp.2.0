@@ -19,6 +19,7 @@ import {
   Sparkles,
   ArrowRight,
   TrendingUp,
+  Star,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -445,7 +446,10 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onSele
       {activeTab === 'all_movies' && (
         <div className="space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <h3 className="text-base font-bold text-white">All Platform Movies & Box-Office Breakdown</h3>
+            <div>
+              <h3 className="text-base font-bold text-white">All Platform Movies & Box-Office Breakdown</h3>
+              <p className="mt-1 text-xs text-slate-400">Choose any published creator movie to feature in the home-page hero.</p>
+            </div>
             <div className="relative w-full sm:w-64">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
               <input
@@ -455,6 +459,13 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onSele
                 placeholder="Filter movies..."
                 className="w-full pl-9 pr-3 py-1.5 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white"
               />
+              <button
+                type="button"
+                onClick={() => handleSetFeaturedMovie(null)}
+                className="mt-2 w-full rounded-lg border border-slate-700 px-3 py-2 text-[11px] font-semibold text-slate-300 transition-colors hover:bg-slate-800"
+              >
+                Reset to automatic feature
+              </button>
             </div>
           </div>
 
@@ -504,12 +515,24 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onSele
                     <td className="py-3 px-3 text-cyan-300">₦{(m.creator_share_ngn || 0).toLocaleString()}</td>
                     <td className="py-3 px-3 text-fuchsia-300">₦{(m.platform_fee_ngn || 0).toLocaleString()}</td>
                     <td className="py-3 px-3 font-sans">
-                      <button
-                        onClick={() => onSelectMovie(m.id)}
-                        className="text-cyan-400 hover:underline"
-                      >
-                        Watch
-                      </button>
+                      <div className="flex min-w-[125px] flex-col items-start gap-2">
+                        <button
+                          onClick={() => onSelectMovie(m.id)}
+                          className="text-cyan-400 hover:underline"
+                        >
+                          Watch
+                        </button>
+                        <button
+                          type="button"
+                          disabled={m.status !== 'published'}
+                          onClick={() => handleSetFeaturedMovie(m.id)}
+                          title={m.status !== 'published' ? 'Only published movies can be featured' : 'Show this movie in the homepage hero'}
+                          className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${featuredMovieId === m.id ? 'border-amber-400/50 bg-amber-400/15 text-amber-300' : 'border-slate-700 text-slate-300 hover:border-amber-400/50 hover:text-amber-300'}`}
+                        >
+                          <Star className={`h-3 w-3 ${featuredMovieId === m.id ? 'fill-current' : ''}`} />
+                          {featuredMovieId === m.id ? 'Featured now' : 'Feature on home'}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

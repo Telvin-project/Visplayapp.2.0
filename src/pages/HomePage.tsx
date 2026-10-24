@@ -103,80 +103,63 @@ export const HomePage: React.FC<HomePageProps> = ({
 
   return (
     <div className="space-y-10 pb-16">
-      {/* ---------------- CINEMATIC HERO SPOTLIGHT ---------------- */}
+      {/* ---------------- ADMIN-CURATED CINEMATIC HERO ---------------- */}
       {heroMovie && !searchQuery && (
-        <div className="relative min-h-[380px] sm:min-h-[480px] overflow-hidden border-y border-slate-800/80 bg-gradient-to-r from-slate-950 via-[#0d121d] to-slate-950 shadow-2xl">
-          {/* Backdrop Image with Scrim */}
-          <div className="absolute inset-0">
+        <section className="relative isolate overflow-hidden border-y border-slate-800/80 bg-[#07090e] shadow-2xl">
+          <div className="absolute inset-0 -z-20">
             <img
               src={heroMovie.backdrop_url || heroMovie.poster_url || '/posters/lagos_heist.jpg'}
-              alt={heroMovie.title}
-              className="w-full h-full object-cover object-center opacity-35 filter brightness-75 scale-105 transition-transform duration-1000 ease-out"
+              alt=""
+              aria-hidden="true"
+              className="h-full w-full scale-105 object-cover object-center opacity-30 blur-[1px]"
             />
-            <div className="absolute inset-0 bg-gradient-to-t from-[#07090e] via-[#07090e]/75 to-transparent" />
-            <div className="absolute inset-0 bg-gradient-to-r from-[#07090e] via-[#07090e]/85 to-transparent" />
           </div>
+          <div className="absolute inset-0 -z-10 bg-gradient-to-r from-[#07090e] via-[#07090e]/90 to-[#07090e]/55" />
+          <div className="absolute inset-0 -z-10 bg-gradient-to-t from-[#07090e]/90 via-transparent to-[#07090e]/30" />
 
-          {/* Hero Content */}
-          <div className="relative z-10 px-6 sm:px-10 lg:px-14 py-12 sm:py-20 max-w-2xl space-y-4">
-            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-300">
-              <span className="px-2.5 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 font-bold uppercase tracking-wider text-[10px] border border-cyan-500/30">
-                ★ Spotlight Release
-              </span>
-              <span>·</span>
-              <span className="text-slate-300">{heroMovie.genre}</span>
-              <span>·</span>
-              <span className="text-slate-400">{heroMovie.release_year}</span>
-              {heroMovie.is_purchased && (
-                <>
-                  <span>·</span>
-                  <span className="text-emerald-400 font-bold flex items-center gap-1">
-                    <CheckCircle2 className="w-3.5 h-3.5" /> Unlocked
-                  </span>
-                </>
-              )}
-            </div>
+          <div className="mx-auto grid min-h-[300px] max-w-7xl grid-cols-1 items-center gap-7 px-5 py-8 sm:min-h-[360px] sm:grid-cols-[minmax(150px,230px)_1fr] sm:gap-10 sm:px-8 sm:py-10 lg:px-12">
+            <button
+              type="button"
+              onClick={() => onSelectMovie(heroMovie.id)}
+              className="group mx-auto w-36 overflow-hidden rounded-2xl border border-white/15 shadow-2xl shadow-black/50 transition-transform duration-300 hover:scale-[1.03] sm:mx-0 sm:w-full sm:max-w-[230px]"
+              aria-label={`Watch ${heroMovie.title}`}
+            >
+              <img
+                src={heroMovie.poster_url || heroMovie.backdrop_url || '/posters/lagos_heist.jpg'}
+                alt={heroMovie.title}
+                className="aspect-[2/3] w-full object-cover"
+              />
+            </button>
 
-            <h1 className="text-3xl sm:text-5xl font-black font-display text-white tracking-tight leading-tight">
-              {heroMovie.title}
-            </h1>
-
-            <p className="text-sm sm:text-base text-slate-300 line-clamp-3 leading-relaxed">
-              {heroMovie.synopsis}
-            </p>
-
-            {/* Pricing Value Callout */}
-            <div className="flex flex-wrap items-center gap-3 text-xs text-slate-300 pt-1">
-              <span className="font-bold text-cyan-300 font-mono text-sm">
-                ₦100 Full Unlock
-              </span>
-              <span>·</span>
-              <span className="flex items-center gap-1 text-slate-300">
-                <Clock className="w-3.5 h-3.5 text-cyan-400" />
-                <span>5-Minute Free Preview</span>
-              </span>
-            </div>
-
-            {/* Action Buttons */}
-            <div className="flex flex-wrap items-center gap-3 pt-3">
+            <div className="mx-auto max-w-2xl space-y-3 text-center sm:mx-0 sm:text-left">
+              <div className="inline-flex items-center gap-2 rounded-full border border-cyan-400/30 bg-cyan-400/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-200">
+                <Sparkles className="h-3.5 w-3.5" /> Featured on VisPlay
+              </div>
+              <h1 className="text-3xl font-black leading-tight tracking-tight text-white sm:text-4xl lg:text-5xl">
+                {heroMovie.title}
+              </h1>
               <button
-                onClick={() => onSelectMovie(heroMovie.id)}
-                className="py-3 px-6 rounded-xl font-bold text-sm bg-gradient-to-r from-cyan-500 via-blue-600 to-fuchsia-600 hover:from-cyan-400 hover:to-fuchsia-500 text-white shadow-xl shadow-cyan-500/20 active:scale-95 transition-all flex items-center gap-2"
-              >
-                <Play className="w-4 h-4 fill-white" />
-                <span>{heroMovie.is_purchased ? 'Play Full Movie' : 'Watch 5m Preview Free'}</span>
-              </button>
-
-              <button
+                type="button"
                 onClick={() => onSelectCreator(heroMovie.creator_id)}
-                className="py-3 px-5 rounded-xl font-semibold text-xs bg-slate-900/90 hover:bg-slate-800 border border-slate-700 text-slate-200 transition-colors flex items-center gap-2"
+                className="text-sm font-semibold text-slate-300 transition-colors hover:text-cyan-300"
               >
-                <Film className="w-3.5 h-3.5 text-fuchsia-400" />
-                <span>Channel: {heroMovie.creator_name || 'Filmmaker'}</span>
+                {heroMovie.creator_name || 'Featured Creator'}
               </button>
+              <p className="mx-auto line-clamp-2 max-w-xl text-sm leading-relaxed text-slate-300 sm:mx-0">
+                {heroMovie.synopsis?.trim() || 'Discover this featured story, selected by the VisPlay team.'}
+              </p>
+              <div className="pt-2">
+                <button
+                  onClick={() => onSelectMovie(heroMovie.id)}
+                  className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 via-blue-600 to-fuchsia-600 px-6 py-3 text-sm font-bold text-white shadow-xl shadow-cyan-500/20 transition-all hover:brightness-110 active:scale-95"
+                >
+                  <Play className="h-4 w-4 fill-white" />
+                  Watch Now
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        </section>
       )}
 
       {/* ---------------- DISCOVERY & FILTER CONTROLS ---------------- */}
