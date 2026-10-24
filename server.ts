@@ -347,7 +347,14 @@ async function startServer() {
     }
 
     const db = loadDatabase();
-    const existing = db.creator_profiles.find(cp => cp.user_id === req.user!.id);
+    // Match by the authenticated account's email as a fallback if an OAuth sync ever changes the internal user ID.
+    const currentUser = db.users.find(u => u.id === req.user!.id);
+    const existing = db.creator_profiles.find(cp => cp.user_id === req.user!.id)
+      || db.creator_profiles.find(cp => {
+        const owner = db.users.find(u => u.id === cp.user_id);
+        return Boolean(currentUser?.email && owner?.email?.toLowerCase() === currentUser.email.toLowerCase());
+      });
+    if (existing && existing.user_id !== req.user!.id) existing.user_id = req.user!.id;
     if (existing && existing.status === 'pending') {
       res.status(400).json({ error: 'You already have a pending creator application undergoing review.' });
       return;

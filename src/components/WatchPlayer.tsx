@@ -509,7 +509,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       {/* ---------------- PLAYER CONTAINER ---------------- */}
       <div
         ref={playerContainerRef}
-        className="relative aspect-video w-full bg-black overflow-hidden shadow-2xl border-y border-slate-800/80 group select-none"
+        className="visplay-player relative aspect-video w-full bg-black overflow-hidden shadow-2xl border-y border-slate-800/80 group select-none"
         onMouseMove={() => {
           setShowControls(true);
           if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
@@ -522,6 +522,9 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
           poster={movie.backdrop_url || movie.poster_url}
           className="w-full h-full object-contain cursor-pointer"
           playsInline
+          width={1280}
+          height={720}
+          disablePictureInPicture={false}
           preload="metadata"
           onTimeUpdate={handleTimeUpdate}
           onLoadedMetadata={() => {
