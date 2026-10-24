@@ -9,6 +9,7 @@ import { v4 as uuidv4 } from 'uuid';
 import {
   loadDatabase,
   saveDatabase,
+  initializeDatabase,
   User,
   CreatorProfile,
   Movie,
@@ -126,6 +127,7 @@ function requireCreator(req: AuthenticatedRequest, res: Response, next: NextFunc
 }
 
 async function startServer() {
+  await initializeDatabase();
   const app = express();
 
   app.use(express.json());
@@ -139,7 +141,7 @@ async function startServer() {
   // AUTH ROUTES
   // -------------------------------------------------------------
 
-  app.post('/api/auth/register', (req: Request, res: Response) => {
+  app.post('/api/auth/register', async (req: Request, res: Response) => {
     const { email, password, full_name, phone } = req.body;
     if (!email || !password || !full_name) {
       res.status(400).json({ error: 'Email, password, and full name are required.' });
@@ -168,7 +170,7 @@ async function startServer() {
     };
 
     db.users.push(newUser);
-    saveDatabase(db);
+    await saveDatabase(db);
 
     const token = jwt.sign({ userId: newUser.id }, JWT_SECRET, { expiresIn: '7d' });
     res.cookie('visplay_token', token, {
@@ -209,7 +211,7 @@ async function startServer() {
   });
 
   // Supabase Auth Synchronization (Google OAuth & Supabase session sync)
-  app.post('/api/auth/supabase-sync', (req: Request, res: Response) => {
+  app.post('/api/auth/supabase-sync', async (req: Request, res: Response) => {
     const { email, full_name, avatar_url } = req.body;
     if (!email) {
       res.status(400).json({ error: 'Email is required for Supabase authentication synchronization.' });
@@ -261,7 +263,7 @@ async function startServer() {
       user.role = 'creator';
     }
 
-    saveDatabase(db);
+    await saveDatabase(db);
 
     const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
     res.cookie('visplay_token', token, {
@@ -275,7 +277,7 @@ async function startServer() {
     res.json({ user: safeUser, creator_profile: creatorProfile || null, token });
   });
 
-  app.get('/api/auth/me', (req: AuthenticatedRequest, res: Response) => {
+  app.get('/api/auth/me', async (req: AuthenticatedRequest, res: Response) => {
     if (!req.user) {
       res.json({ user: null });
       return;
@@ -299,7 +301,7 @@ async function startServer() {
     if (creatorProfile?.status === 'approved' && freshUser.role !== 'admin') {
       freshUser.role = 'creator';
     }
-    saveDatabase(db);
+    await saveDatabase(db);
     const { password_hash: _, ...safeUser } = freshUser;
     res.json({ user: safeUser, creator_profile: creatorProfile });
   });
@@ -309,7 +311,7 @@ async function startServer() {
     res.json({ success: true, message: 'Logged out successfully.' });
   });
 
-  app.put('/api/auth/profile', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+  app.put('/api/auth/profile', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     const { full_name, phone, avatar_url } = req.body;
     const db = loadDatabase();
     const userIndex = db.users.findIndex(u => u.id === req.user!.id);
@@ -328,7 +330,7 @@ async function startServer() {
       db.creator_profiles[creatorIndex].channel_avatar_url = avatar_url;
     }
 
-    saveDatabase(db);
+    await saveDatabase(db);
     const { password_hash: _, ...safeUser } = db.users[userIndex];
     res.json({ user: safeUser, message: 'Profile updated successfully.' });
   });
@@ -337,7 +339,7 @@ async function startServer() {
   // CREATOR APPLICATION & CHANNEL MANAGEMENT
   // -------------------------------------------------------------
 
-  app.post('/api/creators/apply', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+  app.post('/api/creators/apply', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     const { channel_name, content_type, description, channel_banner_url, channel_avatar_url } = req.body;
     if (!channel_name || !content_type) {
       res.status(400).json({ error: 'Channel name and content type are required.' });
@@ -384,11 +386,11 @@ async function startServer() {
       created_at: new Date().toISOString(),
     });
 
-    saveDatabase(db);
+    await saveDatabase(db);
     res.status(201).json({ creator_profile: newApplication, message: 'Application submitted successfully.' });
   });
 
-  app.get('/api/creators/my-channel', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+  app.get('/api/creators/my-channel', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     const db = loadDatabase();
     const currentUser = db.users.find(u => u.id === req.user!.id);
     // OAuth sync can recreate the internal user ID while the creator profile
@@ -405,12 +407,12 @@ async function startServer() {
 
     if (profile.user_id !== req.user!.id) {
       profile.user_id = req.user!.id;
-      saveDatabase(db);
+      await saveDatabase(db);
     }
 
     if (profile.status === 'approved' && currentUser && currentUser.role !== 'admin') {
       currentUser.role = 'creator';
-      saveDatabase(db);
+      await saveDatabase(db);
     }
 
     const movies = db.movies.filter(m => m.creator_id === profile.id);
@@ -470,7 +472,7 @@ async function startServer() {
     res.json({ creator: profile, movies, followers_count: followersCount });
   });
 
-  app.post('/api/creators/follow/:id', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+  app.post('/api/creators/follow/:id', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     const db = loadDatabase();
     const targetCreatorId = req.params.id;
     const existingIndex = db.follows.findIndex(
@@ -491,7 +493,7 @@ async function startServer() {
       isFollowing = true;
     }
 
-    saveDatabase(db);
+    await saveDatabase(db);
     const totalFollowers = db.follows.filter(f => f.creator_user_id === targetCreatorId).length;
     res.json({ is_following: isFollowing, followers_count: totalFollowers });
   });
@@ -576,14 +578,14 @@ async function startServer() {
   });
 
   // Super Admin: Set Featured Spotlight Movie for Homepage
-  app.post('/api/admin/featured-movie', requireAdmin, (req: AuthenticatedRequest, res: Response) => {
+  app.post('/api/admin/featured-movie', requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
     const { movie_id, custom_backdrop } = req.body;
     const db = loadDatabase();
 
     if (!movie_id) {
       db.featured_movie_id = undefined;
       db.featured_movie_backdrop = undefined;
-      saveDatabase(db);
+      await saveDatabase(db);
       res.json({ success: true, message: 'Featured spotlight reset to automatic' });
       return;
     }
@@ -598,7 +600,7 @@ async function startServer() {
     if (custom_backdrop !== undefined) {
       db.featured_movie_backdrop = custom_backdrop || undefined;
     }
-    saveDatabase(db);
+    await saveDatabase(db);
 
     // Audit log
     db.audit_logs.push({
@@ -612,7 +614,7 @@ async function startServer() {
       ip_address: req.ip || '127.0.0.1',
       created_at: new Date().toISOString(),
     });
-    saveDatabase(db);
+    await saveDatabase(db);
 
     res.json({ success: true, message: `Featured hero movie set to "${movie.title}"`, featured_movie_id: movie.id });
   });
@@ -757,7 +759,7 @@ async function startServer() {
       { name: 'video', maxCount: 1 },
       { name: 'poster', maxCount: 1 },
     ]),
-    (req: AuthenticatedRequest, res: Response) => {
+    async (req: AuthenticatedRequest, res: Response) => {
       const { title, synopsis, genre, release_year, rights_confirmed } = req.body;
       if (!title || !synopsis || !genre) {
         res.status(400).json({ error: 'Title, synopsis, and genre are required.' });
@@ -825,13 +827,13 @@ async function startServer() {
         created_at: new Date().toISOString(),
       });
 
-      saveDatabase(db);
+      await saveDatabase(db);
       res.status(201).json({ movie: newMovie, message: 'Movie submitted successfully for review.' });
     }
   );
 
   // Likes
-  app.post('/api/movies/:id/like', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+  app.post('/api/movies/:id/like', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     const movieId = req.params.id;
     const db = loadDatabase();
     const existingIndex = db.likes.findIndex(l => l.movie_id === movieId && l.user_id === req.user!.id);
@@ -850,7 +852,7 @@ async function startServer() {
       isLiked = true;
     }
 
-    saveDatabase(db);
+    await saveDatabase(db);
     const totalLikes = db.likes.filter(l => l.movie_id === movieId).length;
     res.json({ is_liked: isLiked, likes_count: totalLikes });
   });
@@ -864,7 +866,7 @@ async function startServer() {
     res.json({ comments });
   });
 
-  app.post('/api/movies/:id/comments', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+  app.post('/api/movies/:id/comments', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     const { comment_text, parent_id } = req.body;
     if (!comment_text || !comment_text.trim()) {
       res.status(400).json({ error: 'Comment text cannot be empty.' });
@@ -885,11 +887,11 @@ async function startServer() {
     };
 
     db.comments.push(newComment);
-    saveDatabase(db);
+    await saveDatabase(db);
     res.status(201).json({ comment: newComment });
   });
 
-  app.delete('/api/movies/:id/comments/:commentId', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+  app.delete('/api/movies/:id/comments/:commentId', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     const db = loadDatabase();
     const commentIndex = db.comments.findIndex(c => c.id === req.params.commentId);
     if (commentIndex === -1) {
@@ -904,7 +906,7 @@ async function startServer() {
     }
 
     db.comments.splice(commentIndex, 1);
-    saveDatabase(db);
+    await saveDatabase(db);
     res.json({ success: true, message: 'Comment deleted.' });
   });
 
@@ -941,7 +943,7 @@ async function startServer() {
   });
 
   // Track viewing events (Deduplicated, logs milestones & preview pause)
-  app.post('/api/movies/:id/track-view', (req: AuthenticatedRequest, res: Response) => {
+  app.post('/api/movies/:id/track-view', async (req: AuthenticatedRequest, res: Response) => {
     const { session_id, duration_watched_seconds, reached_5_min, completed } = req.body;
     const movieId = req.params.id;
     const db = loadDatabase();
@@ -978,7 +980,7 @@ async function startServer() {
       if (completed) event.completed = true;
     }
 
-    saveDatabase(db);
+    await saveDatabase(db);
     res.json({ success: true, views_count: movie.views_count });
   });
 
@@ -1040,7 +1042,7 @@ async function startServer() {
         created_at: new Date().toISOString(),
       };
       db.transactions.push(pendingTx);
-      saveDatabase(db);
+      await saveDatabase(db);
       res.json({ reference, authorization_url: result.data.authorization_url });
     } catch (error) {
       console.error('Paystack initialization error:', error);
@@ -1111,7 +1113,7 @@ async function startServer() {
         is_read: false,
         created_at: new Date().toISOString(),
       });
-      saveDatabase(db);
+      await saveDatabase(db);
       res.json({ success: true, wallet_balance: user.wallet_balance, transaction: latestTx });
     } catch (error) {
       console.error('Paystack verification error:', error);
@@ -1120,7 +1122,7 @@ async function startServer() {
   });
 
   // Purchase Individual Movie (₦100)
-  app.post('/api/purchases/buy-movie', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+  app.post('/api/purchases/buy-movie', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     const { movie_id } = req.body;
     const db = loadDatabase();
     const movie = db.movies.find(m => m.id === movie_id);
@@ -1223,7 +1225,7 @@ async function startServer() {
       created_at: new Date().toISOString(),
     });
 
-    saveDatabase(db);
+    await saveDatabase(db);
     res.json({
       success: true,
       message: `Unlocked "${movie.title}" for ₦${price}. Enjoy the full movie!`,
@@ -1234,7 +1236,7 @@ async function startServer() {
   });
 
   // Purchase 10-Episode Bundle (₦700 Total)
-  app.post('/api/purchases/buy-bundle', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+  app.post('/api/purchases/buy-bundle', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     const { bundle_id } = req.body;
     const db = loadDatabase();
     const bundle = db.bundles.find(b => b.id === bundle_id);
@@ -1331,7 +1333,7 @@ async function startServer() {
       created_at: new Date().toISOString(),
     });
 
-    saveDatabase(db);
+    await saveDatabase(db);
     res.json({
       success: true,
       message: `Unlocked all 10 episodes of "${bundle.title}" for ₦${price}!`,
@@ -1433,7 +1435,7 @@ async function startServer() {
     res.json({ applications });
   });
 
-  app.post('/api/admin/creator-applications/:id/review', requireAdmin, (req: AuthenticatedRequest, res: Response) => {
+  app.post('/api/admin/creator-applications/:id/review', requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
     const { action, notes } = req.body; // action: 'approve' | 'reject'
     if (action !== 'approve' && action !== 'reject') {
       res.status(400).json({ error: 'Action must be approve or reject.' });
@@ -1485,7 +1487,7 @@ async function startServer() {
       });
     }
 
-    saveDatabase(db);
+    await saveDatabase(db);
     res.json({ success: true, creator_profile: profile, message: `Application ${action}d successfully.` });
   });
 
@@ -1513,7 +1515,7 @@ async function startServer() {
   });
 
   // Admin Movie Moderation
-  app.post('/api/admin/movies/:id/review', requireAdmin, (req: AuthenticatedRequest, res: Response) => {
+  app.post('/api/admin/movies/:id/review', requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
     const { action, notes } = req.body; // action: 'approve' | 'reject' | 'publish'
     const db = loadDatabase();
     const movie = db.movies.find(m => m.id === req.params.id);
@@ -1553,7 +1555,7 @@ async function startServer() {
       });
     }
 
-    saveDatabase(db);
+    await saveDatabase(db);
     res.json({ success: true, movie, message: `Movie status set to ${movie.status}.` });
   });
 
@@ -1599,7 +1601,7 @@ async function startServer() {
     res.json({ payouts });
   });
 
-  app.post('/api/admin/payouts/process', requireAdmin, (req: AuthenticatedRequest, res: Response) => {
+  app.post('/api/admin/payouts/process', requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
     const { creator_id, month_period } = req.body;
     const db = loadDatabase();
     const creator = db.creator_profiles.find(cp => cp.id === creator_id);
@@ -1650,7 +1652,7 @@ async function startServer() {
       created_at: new Date().toISOString(),
     });
 
-    saveDatabase(db);
+    await saveDatabase(db);
     res.json({ success: true, payout, message: `Disbursed ₦${netPayout.toLocaleString()} to ${creator.channel_name}.` });
   });
 
@@ -1663,7 +1665,7 @@ async function startServer() {
     res.json({ livestreams: db.livestreams });
   });
 
-  app.post('/api/livestreams', requireCreator, (req: AuthenticatedRequest, res: Response) => {
+  app.post('/api/livestreams', requireCreator, async (req: AuthenticatedRequest, res: Response) => {
     const { title, description, scheduled_at, stream_url } = req.body;
     if (!title) {
       res.status(400).json({ error: 'Livestream title is required.' });
@@ -1687,7 +1689,7 @@ async function startServer() {
     };
 
     db.livestreams.unshift(newStream);
-    saveDatabase(db);
+    await saveDatabase(db);
     res.status(201).json({ livestream: newStream });
   });
 
@@ -1705,7 +1707,7 @@ async function startServer() {
     res.json({ rewards, total_points: totalPoints, total_naira_equivalent: totalNairaEarned });
   });
 
-  app.post('/api/rewards/claim', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+  app.post('/api/rewards/claim', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     const { reward_type, points, reason } = req.body;
     const pts = parseInt(points, 10) || 100;
     const naira = Math.floor(pts / 5); // 100 pts = ₦20 coins
@@ -1743,7 +1745,7 @@ async function startServer() {
       created_at: new Date().toISOString(),
     });
 
-    saveDatabase(db);
+    await saveDatabase(db);
     res.json({ success: true, reward: newReward, wallet_balance: user.wallet_balance });
   });
 
@@ -1753,12 +1755,12 @@ async function startServer() {
     res.json({ notifications });
   });
 
-  app.post('/api/notifications/read-all', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+  app.post('/api/notifications/read-all', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     const db = loadDatabase();
     db.notifications.filter(n => n.user_id === req.user!.id).forEach(n => {
       n.is_read = true;
     });
-    saveDatabase(db);
+    await saveDatabase(db);
     res.json({ success: true });
   });
 
