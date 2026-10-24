@@ -98,68 +98,130 @@ export const HomePage: React.FC<HomePageProps> = ({
 
   const genres = ['All', 'Drama', 'Comedy', 'Action', 'Romance', 'Thriller', 'Horror', 'Documentary', 'Series'];
 
-  // Lead spotlight film from super admin setting or fallback
-  const heroMovie = featuredMovie || movies.find(m => m.id === 'mov_lagos_syndicate') || movies[0];
+  // The Super Admin's selected title leads the slideshow; the remaining published films follow.
+  const heroSlides = Array.from(
+    new Map(
+      [featuredMovie, ...movies].filter((movie): movie is Movie => Boolean(movie))
+        .filter(movie => !movie.is_bundle_only)
+        .map(movie => [movie.id, movie])
+    ).values()
+  ).slice(0, 12);
+  const [activeHeroIndex, setActiveHeroIndex] = useState(0);
+
+  useEffect(() => {
+    setActiveHeroIndex(0);
+  }, [featuredMovie?.id, movies.length]);
+
+  useEffect(() => {
+    if (heroSlides.length < 2 || searchQuery) return;
+    const timer = window.setInterval(() => {
+      setActiveHeroIndex(index => (index + 1) % heroSlides.length);
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [heroSlides.length, searchQuery]);
+
+  const heroMovie = heroSlides[activeHeroIndex] || featuredMovie || movies[0];
 
   return (
     <div className="space-y-10 pb-16">
-      {/* ---------------- ADMIN-CURATED CINEMATIC HERO ---------------- */}
+      {/* ---------------- CINEMATIC AUTO-SLIDING HERO ---------------- */}
       {heroMovie && !searchQuery && (
-        <section className="relative isolate overflow-hidden border-y border-slate-800/80 bg-[#07090e] shadow-2xl">
-          <div className="absolute inset-0 -z-20">
-            <img
-              src={heroMovie.backdrop_url || heroMovie.poster_url || '/posters/lagos_heist.jpg'}
-              alt=""
-              aria-hidden="true"
-              className="h-full w-full scale-105 object-cover object-center opacity-25 blur-sm"
-            />
-          </div>
-          <div className="absolute inset-0 -z-10 bg-gradient-to-r from-[#07090e]/95 via-[#07090e]/75 to-[#07090e]/55" />
-          <div className="absolute inset-0 -z-10 bg-gradient-to-t from-[#07090e]/80 via-transparent to-[#07090e]/20" />
-
-          <div className="mx-auto grid min-h-[260px] max-w-7xl grid-cols-1 items-center gap-5 px-5 py-6 sm:min-h-[320px] sm:grid-cols-[minmax(170px,250px)_1fr] sm:gap-8 sm:px-8 sm:py-8 lg:px-12">
-            <button
-              type="button"
-              onClick={() => onSelectMovie(heroMovie.id)}
-              className="group mx-auto w-32 overflow-hidden rounded-xl border border-white/15 shadow-2xl shadow-black/50 transition-transform duration-300 hover:scale-[1.03] sm:mx-0 sm:w-full sm:max-w-[250px]"
-              aria-label={`Watch ${heroMovie.title}`}
-            >
-              <img
-                src={heroMovie.poster_url || heroMovie.backdrop_url || '/posters/lagos_heist.jpg'}
-                alt={heroMovie.title}
-                className="aspect-[2/3] w-full object-cover"
-              />
-            </button>
-
-            <div className="mx-auto max-w-2xl space-y-2.5 text-center sm:mx-0 sm:text-left">
-              <div className="inline-flex items-center gap-2 rounded-full border border-cyan-400/30 bg-cyan-400/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-200">
-                <Sparkles className="h-3.5 w-3.5" /> Featured on VisPlay
+        <section className="relative isolate -mt-2 overflow-hidden bg-[#08090d] shadow-2xl">
+          <div className="absolute inset-0">
+            {heroSlides.map((movie, index) => (
+              <div
+                key={movie.id}
+                aria-hidden={index !== activeHeroIndex}
+                className={`absolute inset-0 transition-opacity duration-700 ease-in-out ${index === activeHeroIndex ? 'opacity-100' : 'opacity-0'}`}
+              >
+                <img
+                  src={movie.backdrop_url || movie.poster_url || '/posters/lagos_heist.jpg'}
+                  alt=""
+                  className="h-full w-full scale-105 object-cover object-center"
+                />
               </div>
-              <h1 className="text-3xl font-black leading-tight tracking-tight text-white sm:text-4xl lg:text-5xl">
-                {heroMovie.title}
-              </h1>
-              <button
-                type="button"
-                onClick={() => onSelectCreator(heroMovie.creator_id)}
-                className="text-sm font-semibold text-slate-200 transition-colors hover:text-cyan-300"
-              >
-                {heroMovie.creator_name || 'Featured Creator'}
-              </button>
-              <p className="mx-auto line-clamp-1 max-w-xl text-sm leading-relaxed text-slate-300 sm:mx-0">
-                {(heroMovie.synopsis?.trim() || 'A featured story selected for you.').slice(0, 105)}
-              </p>
-              <button
-                onClick={() => onSelectMovie(heroMovie.id)}
-                className="mt-1 inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 via-blue-600 to-fuchsia-600 px-5 py-2.5 text-sm font-bold text-white shadow-xl shadow-cyan-500/20 transition-all hover:brightness-110 active:scale-95"
-              >
-                <Play className="h-4 w-4 fill-white" />
-                Watch Now
-              </button>
+            ))}
+          </div>
+          <div className="absolute inset-0 bg-gradient-to-b from-black/30 via-black/10 to-[#08090d]" />
+          <div className="absolute inset-0 bg-gradient-to-r from-black/45 via-transparent to-black/10" />
+
+          <div className="relative flex min-h-[410px] flex-col justify-between sm:min-h-[500px]">
+            <div className="flex items-center justify-between gap-3 px-4 pt-5 sm:px-8 sm:pt-7">
+              <div className="flex min-w-0 items-center gap-2 rounded-full border border-white/15 bg-black/30 px-3 py-1.5 text-[11px] font-bold uppercase tracking-[0.16em] text-white/90 backdrop-blur-sm">
+                <Sparkles className="h-3.5 w-3.5 text-amber-300" />
+                <span className="truncate">Featured on VisPlay</span>
+              </div>
+              <span className="shrink-0 text-xs font-semibold text-white/80">
+                {String(activeHeroIndex + 1).padStart(2, '0')} / {String(heroSlides.length).padStart(2, '0')}
+              </span>
+            </div>
+
+            <div className="relative mt-auto px-4 pb-3 pt-24 sm:px-8 sm:pb-5 lg:px-12">
+              <div className="max-w-2xl space-y-2 drop-shadow-lg">
+                <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/75 sm:text-xs">
+                  {heroMovie.creator_name || 'VisPlay Spotlight'}
+                </p>
+                <h1 className="max-w-xl text-3xl font-black leading-[1.02] tracking-tight text-white sm:text-5xl lg:text-6xl">
+                  {heroMovie.title}
+                </h1>
+                <p className="max-w-lg text-xs leading-relaxed text-white/85 sm:text-sm">
+                  {(heroMovie.synopsis?.trim() || 'Your next story starts here.').slice(0, 105)}
+                </p>
+                <div className="flex items-center gap-3 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => onSelectMovie(heroMovie.id)}
+                    className="inline-flex items-center gap-2 rounded-lg bg-white px-5 py-2.5 text-sm font-extrabold text-black shadow-xl transition hover:bg-white/90 active:scale-95"
+                  >
+                    <Play className="h-4 w-4 fill-current" />
+                    Watch Now
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onSelectCreator(heroMovie.creator_id)}
+                    className="rounded-lg border border-white/30 bg-black/25 px-4 py-2.5 text-sm font-semibold text-white backdrop-blur-sm transition hover:bg-white/10"
+                  >
+                    Creator
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-5 flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {heroSlides.slice(0, 6).map((movie, index) => (
+                  <button
+                    key={movie.id}
+                    type="button"
+                    onClick={() => setActiveHeroIndex(index)}
+                    aria-label={`Show ${movie.title}`}
+                    aria-current={index === activeHeroIndex ? 'true' : undefined}
+                    className={`group relative h-[68px] w-[116px] shrink-0 overflow-hidden rounded-lg border transition-all duration-300 sm:h-[86px] sm:w-[150px] ${index === activeHeroIndex ? 'border-white ring-2 ring-white/70 ring-offset-1 ring-offset-black/50' : 'border-white/20 opacity-75 hover:opacity-100'}`}
+                  >
+                    <img
+                      src={movie.poster_url || movie.backdrop_url || '/posters/lagos_heist.jpg'}
+                      alt=""
+                      className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+                    />
+                    <span className="absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/95 to-transparent px-2 pb-1 pt-4 text-left text-[10px] font-bold text-white sm:text-xs">
+                      {movie.title}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <div className="mt-3 flex items-center gap-1.5" aria-label="Slideshow position">
+                {heroSlides.slice(0, 8).map((movie, index) => (
+                  <button
+                    key={movie.id}
+                    type="button"
+                    onClick={() => setActiveHeroIndex(index)}
+                    aria-label={`Go to slide ${index + 1}`}
+                    className={`h-1 rounded-full transition-all ${index === activeHeroIndex ? 'w-7 bg-white' : 'w-2 bg-white/45 hover:bg-white/75'}`}
+                  />
+                ))}
+              </div>
             </div>
           </div>
         </section>
       )}
-
       {/* ---------------- DISCOVERY & FILTER CONTROLS ---------------- */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
         {/* Category Sorting Pills */}
