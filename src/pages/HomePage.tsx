@@ -111,17 +111,17 @@ export const HomePage: React.FC<HomePageProps> = ({
               src={heroMovie.backdrop_url || heroMovie.poster_url || '/posters/lagos_heist.jpg'}
               alt=""
               aria-hidden="true"
-              className="h-full w-full scale-105 object-cover object-center opacity-30 blur-[1px]"
+              className="h-full w-full scale-105 object-cover object-center opacity-25 blur-sm"
             />
           </div>
-          <div className="absolute inset-0 -z-10 bg-gradient-to-r from-[#07090e] via-[#07090e]/90 to-[#07090e]/55" />
-          <div className="absolute inset-0 -z-10 bg-gradient-to-t from-[#07090e]/90 via-transparent to-[#07090e]/30" />
+          <div className="absolute inset-0 -z-10 bg-gradient-to-r from-[#07090e]/95 via-[#07090e]/75 to-[#07090e]/55" />
+          <div className="absolute inset-0 -z-10 bg-gradient-to-t from-[#07090e]/80 via-transparent to-[#07090e]/20" />
 
-          <div className="mx-auto grid min-h-[300px] max-w-7xl grid-cols-1 items-center gap-7 px-5 py-8 sm:min-h-[360px] sm:grid-cols-[minmax(150px,230px)_1fr] sm:gap-10 sm:px-8 sm:py-10 lg:px-12">
+          <div className="mx-auto grid min-h-[260px] max-w-7xl grid-cols-1 items-center gap-5 px-5 py-6 sm:min-h-[320px] sm:grid-cols-[minmax(170px,250px)_1fr] sm:gap-8 sm:px-8 sm:py-8 lg:px-12">
             <button
               type="button"
               onClick={() => onSelectMovie(heroMovie.id)}
-              className="group mx-auto w-36 overflow-hidden rounded-2xl border border-white/15 shadow-2xl shadow-black/50 transition-transform duration-300 hover:scale-[1.03] sm:mx-0 sm:w-full sm:max-w-[230px]"
+              className="group mx-auto w-32 overflow-hidden rounded-xl border border-white/15 shadow-2xl shadow-black/50 transition-transform duration-300 hover:scale-[1.03] sm:mx-0 sm:w-full sm:max-w-[250px]"
               aria-label={`Watch ${heroMovie.title}`}
             >
               <img
@@ -131,8 +131,8 @@ export const HomePage: React.FC<HomePageProps> = ({
               />
             </button>
 
-            <div className="mx-auto max-w-2xl space-y-3 text-center sm:mx-0 sm:text-left">
-              <div className="inline-flex items-center gap-2 rounded-full border border-cyan-400/30 bg-cyan-400/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-200">
+            <div className="mx-auto max-w-2xl space-y-2.5 text-center sm:mx-0 sm:text-left">
+              <div className="inline-flex items-center gap-2 rounded-full border border-cyan-400/30 bg-cyan-400/10 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-200">
                 <Sparkles className="h-3.5 w-3.5" /> Featured on VisPlay
               </div>
               <h1 className="text-3xl font-black leading-tight tracking-tight text-white sm:text-4xl lg:text-5xl">
@@ -141,22 +141,20 @@ export const HomePage: React.FC<HomePageProps> = ({
               <button
                 type="button"
                 onClick={() => onSelectCreator(heroMovie.creator_id)}
-                className="text-sm font-semibold text-slate-300 transition-colors hover:text-cyan-300"
+                className="text-sm font-semibold text-slate-200 transition-colors hover:text-cyan-300"
               >
                 {heroMovie.creator_name || 'Featured Creator'}
               </button>
-              <p className="mx-auto line-clamp-2 max-w-xl text-sm leading-relaxed text-slate-300 sm:mx-0">
-                {heroMovie.synopsis?.trim() || 'Discover this featured story, selected by the VisPlay team.'}
+              <p className="mx-auto line-clamp-1 max-w-xl text-sm leading-relaxed text-slate-300 sm:mx-0">
+                {(heroMovie.synopsis?.trim() || 'A featured story selected for you.').slice(0, 105)}
               </p>
-              <div className="pt-2">
-                <button
-                  onClick={() => onSelectMovie(heroMovie.id)}
-                  className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 via-blue-600 to-fuchsia-600 px-6 py-3 text-sm font-bold text-white shadow-xl shadow-cyan-500/20 transition-all hover:brightness-110 active:scale-95"
-                >
-                  <Play className="h-4 w-4 fill-white" />
-                  Watch Now
-                </button>
-              </div>
+              <button
+                onClick={() => onSelectMovie(heroMovie.id)}
+                className="mt-1 inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 via-blue-600 to-fuchsia-600 px-5 py-2.5 text-sm font-bold text-white shadow-xl shadow-cyan-500/20 transition-all hover:brightness-110 active:scale-95"
+              >
+                <Play className="h-4 w-4 fill-white" />
+                Watch Now
+              </button>
             </div>
           </div>
         </section>
