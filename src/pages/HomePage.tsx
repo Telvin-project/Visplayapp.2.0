@@ -1,6 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Movie, EpisodeBundle, Livestream, Premiere, CreatorProfile } from '../types';
 import { MovieCard } from '../components/MovieCard';
+
+const resolveHeroImage = (url?: string | null) => {
+  if (!url) return '/posters/lagos_heist.jpg';
+  return url.startsWith('/uploads/') ? `https://visplayapp-2-0.onrender.com${url}` : url;
+};
 import {
   Play,
   Clock,
@@ -135,7 +140,7 @@ export const HomePage: React.FC<HomePageProps> = ({
                 className={`absolute inset-0 transition-opacity duration-700 ease-in-out ${index === activeHeroIndex ? 'opacity-100' : 'opacity-0'}`}
               >
                 <img
-                  src={movie.poster_url || movie.backdrop_url || '/posters/lagos_heist.jpg'}
+                  src={resolveHeroImage(movie.poster_url || movie.backdrop_url)}
                   alt=""
                   className="h-full w-full scale-105 object-cover object-center"
                 />
