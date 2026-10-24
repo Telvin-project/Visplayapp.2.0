@@ -62,6 +62,8 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
       if (res.ok) {
         const data = await res.json();
         setChannelData(data);
+      } else {
+        setChannelData(null);
       }
     } catch (e) {
       console.error(e);
@@ -189,13 +191,17 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
     }
   };
 
-  if (!creatorProfile || creatorProfile.status !== 'approved') {
+  // Prefer the freshly fetched backend profile when available. This prevents
+  // a stale/null auth-context profile from hiding an already-approved channel.
+  const resolvedCreatorProfile = channelData?.creator_profile || creatorProfile;
+
+  if (!resolvedCreatorProfile || resolvedCreatorProfile.status !== 'approved') {
     return (
       <div className="py-16 text-center max-w-lg mx-auto bg-[#0d121d] border border-slate-800 rounded-3xl p-8 space-y-4">
         <Film className="w-12 h-12 text-cyan-400 mx-auto" />
         <h2 className="text-xl font-bold text-white">Creator Access Required</h2>
         <p className="text-xs text-slate-400">
-          {creatorProfile?.status === 'pending'
+          {resolvedCreatorProfile?.status === 'pending'
             ? 'Your creator application is currently under review by the Super Admin.'
             : 'You must apply and be approved as a VisPlay creator to access Creator Studio.'}
         </p>
@@ -203,7 +209,7 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
           onClick={openCreatorApplyModal}
           className="py-2.5 px-5 bg-gradient-to-r from-cyan-500 to-blue-600 text-white rounded-xl text-xs font-semibold"
         >
-          {creatorProfile?.status === 'pending' ? 'View Application Status' : 'Apply for Creator Account'}
+          {resolvedCreatorProfile?.status === 'pending' ? 'View Application Status' : 'Apply for Creator Account'}
         </button>
       </div>
     );
@@ -229,20 +235,20 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
       <div className="rounded-3xl bg-gradient-to-r from-[#0d1322] via-[#11162b] to-[#15102a] border border-slate-800 p-6 sm:p-8 flex flex-col md:flex-row items-center justify-between gap-6 shadow-2xl">
         <div className="flex items-center gap-4">
           <img
-            src={creatorProfile.channel_avatar_url || user?.avatar_url || '/visplay-symbol.png'}
-            alt={creatorProfile.channel_name}
+            src={resolvedCreatorProfile.channel_avatar_url || user?.avatar_url || '/visplay-symbol.png'}
+            alt={resolvedCreatorProfile.channel_name}
             className="w-16 h-16 rounded-2xl object-cover border-2 border-cyan-500/60 shadow-lg"
           />
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-xl sm:text-2xl font-bold font-display text-white">
-                {creatorProfile.channel_name}
+                {resolvedCreatorProfile.channel_name}
               </h1>
               <span className="text-[10px] font-bold text-emerald-300 bg-emerald-950/80 border border-emerald-700 px-2 py-0.5 rounded-full">
                 APPROVED CREATOR
               </span>
             </div>
-            <p className="text-xs text-slate-400 mt-0.5">{creatorProfile.content_type}</p>
+            <p className="text-xs text-slate-400 mt-0.5">{resolvedCreatorProfile.content_type}</p>
           </div>
         </div>
 
