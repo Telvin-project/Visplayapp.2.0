@@ -101,19 +101,48 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
         formData.append('poster', posterFile);
       }
 
-      setUploadProgress(45);
-
-      const res = await fetch('/api/movies/upload', {
-        method: 'POST',
-        body: formData,
+      // Use XMLHttpRequest so the browser can report real upload progress.
+      // fetch() does not expose request-body upload progress, which left the UI
+      // frozen at the manually assigned 45% while the video was being sent.
+      const data = await new Promise<any>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/movies/upload');
+        xhr.timeout = 10 * 60 * 1000; // Large videos may take several minutes.
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable && event.total > 0) {
+            const percent = Math.round((event.loaded / event.total) * 90);
+            setUploadProgress(Math.max(10, Math.min(90, percent)));
+          } else {
+            setUploadProgress((current) => Math.min(85, current + 1));
+          }
+        };
+        xhr.onload = () => {
+          let responseData: any = {};
+          try {
+            responseData = xhr.responseText ? JSON.parse(xhr.responseText) : {};
+          } catch {
+            reject(new Error(
+              xhr.status >= 500
+                ? 'The upload server returned an error. Please try a smaller video or try again later.'
+                : 'The server returned an unreadable response. Please try again.'
+            ));
+            return;
+          }
+          if (xhr.status < 200 || xhr.status >= 300) {
+            reject(new Error(responseData.error || `Upload failed (HTTP ${xhr.status}).`));
+            return;
+          }
+          resolve(responseData);
+        };
+        xhr.onerror = () => reject(new Error(
+          'The upload connection was interrupted. Check your internet connection and try again.'
+        ));
+        xhr.ontimeout = () => reject(new Error(
+          'The upload took too long and timed out. Try a smaller/compressed video or a stronger connection.'
+        ));
+        xhr.onabort = () => reject(new Error('Upload cancelled.'));
+        xhr.send(formData);
       });
-
-      setUploadProgress(85);
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || 'Upload failed');
-      }
 
       setUploadProgress(100);
       confetti({ particleCount: 50, spread: 60 });
