@@ -21,7 +21,8 @@ import {
 } from 'lucide-react';
 const resolveHeroImage = (url?: string | null) => {
   if (!url) return '/posters/lagos_heist.jpg';
-  return url.startsWith('/uploads/') ? `https://visplayapp-2-0.onrender.com${url}` : url;
+  // Keep uploaded artwork on the app origin; Vercel rewrites /uploads to Render.
+  return url;
 };
 
 
