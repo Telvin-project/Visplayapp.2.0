@@ -4,7 +4,8 @@ import { Play, Clock, CheckCircle2, Eye, Heart } from 'lucide-react';
 
 const resolvePosterUrl = (url?: string | null) => {
   if (!url) return '/posters/lagos_heist.jpg';
-  return url.startsWith('/uploads/') ? `https://visplayapp-2-0.onrender.com${url}` : url;
+  // Uploaded files are routed through the app's /uploads rewrite.
+  return url;
 };
 
 interface MovieCardProps {
