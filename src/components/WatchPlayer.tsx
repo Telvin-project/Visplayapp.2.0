@@ -275,7 +275,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
 
       // Ensure metadata is loaded (video.readyState >= 1) before requesting PiP
       if (video.readyState < 1) {
-        setPipNotice('Video is still loading. Please start video playback before enabling Picture-in-Picture.');
+                setPipNotice('Video is still loading. Please start video playback before enabling Picture-in-Picture.');
         setTimeout(() => setPipNotice(null), 3500);
         return;
       }
@@ -437,7 +437,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       {/* ---------------- PLAYER CONTAINER ---------------- */}
       <div
         ref={playerContainerRef}
-        className="relative aspect-video w-full max-h-[75vh] bg-black rounded-3xl overflow-hidden shadow-2xl border border-slate-800/80 group select-none"
+        className="relative aspect-video w-full bg-black overflow-hidden shadow-2xl border-y border-slate-800/80 group select-none"
         onMouseMove={() => {
           setShowControls(true);
           if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
@@ -553,7 +553,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
                   Preview: 5m Limit
                 </span>
               )}
-            </div>
+                          </div>
 
             <div className="flex items-center gap-2">
               {movie.is_purchased ? (
