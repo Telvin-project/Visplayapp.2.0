@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
+import { createClient } from '@supabase/supabase-js';
 
 export interface User {
   id: string;
@@ -251,84 +252,99 @@ export interface DatabaseSchema {
 }
 
 const DB_FILE = path.join(process.cwd(), 'data', 'visplay_db.json');
-
-// Ensure data folder exists
-if (!fs.existsSync(path.join(process.cwd(), 'data'))) {
-  fs.mkdirSync(path.join(process.cwd(), 'data'), { recursive: true });
-}
+const SUPABASE_TABLE = 'visplay_app_state';
 
 let dbCache: DatabaseSchema | null = null;
+let supabaseClient: ReturnType<typeof createClient> | null = null;
+let persistenceQueue: Promise<void> = Promise.resolve();
 
-export function loadDatabase(): DatabaseSchema {
-  if (dbCache) return dbCache;
+function getSupabaseClient() {
+  if (supabaseClient) return supabaseClient;
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !serviceRoleKey) return null;
+  supabaseClient = createClient(url, serviceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  return supabaseClient;
+}
+
+/** Load the complete application state before accepting requests. */
+export async function initializeDatabase(): Promise<void> {
+  const client = getSupabaseClient();
+  if (!client) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY; refusing to start without persistent storage.');
+    }
+    if (fs.existsSync(DB_FILE)) {
+      dbCache = JSON.parse(fs.readFileSync(DB_FILE, 'utf-8')) as DatabaseSchema;
+    } else {
+      dbCache = getInitialSeed();
+      saveLocalDatabase(dbCache);
+    }
+    return;
+  }
+
+  const { data: row, error } = await client.from(SUPABASE_TABLE).select('data').eq('id', 'main').maybeSingle();
+  if (error) throw new Error('Unable to load VisPlay state from Supabase: ' + error.message);
+
+  if (row?.data) {
+    const state = row.data as DatabaseSchema;
+    if (!state.users || !state.creator_profiles || !state.movies || !state.transactions) {
+      throw new Error('Supabase VisPlay state has an unexpected format; refusing to overwrite it.');
+    }
+    dbCache = state;
+    return;
+  }
+
+  // First migration: preserve an existing local database exactly as found.
+  // In production, never replace missing data with demo seed data.
   if (fs.existsSync(DB_FILE)) {
     try {
-      const content = fs.readFileSync(DB_FILE, 'utf-8');
-      dbCache = JSON.parse(content);
-      
-      // Ensure featured_movie_id exists
-      if (!dbCache!.featured_movie_id && dbCache!.featured_movie_id !== null) {
-        dbCache!.featured_movie_id = 'mov_lagos_syndicate';
-      }
-
-      // Merge any new seed movies if missing
-      const initial = getInitialSeed();
-      let changed = false;
-
-      // One-time cleanup of seeded/demo wallet balances for the live launch.
-      // The flag prevents later restarts from clearing genuine customer funds.
-      if (!dbCache!.demo_balances_cleared) {
-        for (const account of dbCache!.users) account.wallet_balance = 0;
-        dbCache!.demo_balances_cleared = true;
-        changed = true;
-      }
-
-      for (const m of initial.movies) {
-        if (!dbCache!.movies.some(existing => existing.id === m.id)) {
-          dbCache!.movies.push(m);
-          changed = true;
-        }
-      }
-
-      // Ensure all registered or seed Super Admin emails have role='admin'
-      for (const email of SUPER_ADMIN_EMAILS) {
-        const existing = dbCache!.users.find(u => u.email.toLowerCase() === email.toLowerCase());
-        if (existing) {
-          if (existing.role !== 'admin') {
-            existing.role = 'admin';
-            changed = true;
-          }
-        } else {
-          // Provision Super Admin user if not yet in database
-          const seedUser = initial.users.find(u => u.email.toLowerCase() === email.toLowerCase());
-          if (seedUser) {
-            dbCache!.users.unshift({ ...seedUser });
-            changed = true;
-          }
-        }
-      }
-
-      if (changed) {
-        saveDatabase(dbCache!);
-      }
-
-      return dbCache!;
-    } catch (e) {
-      console.error('Error parsing DB_FILE, reinitializing:', e);
+      dbCache = JSON.parse(fs.readFileSync(DB_FILE, 'utf-8')) as DatabaseSchema;
+    } catch {
+      throw new Error('The existing local VisPlay database could not be read. Refusing to seed over it.');
     }
+  } else if (process.env.NODE_ENV === 'production') {
+    throw new Error('Supabase storage is empty and no local database snapshot exists. Refusing to create demo data in production.');
+  } else {
+    dbCache = getInitialSeed();
   }
-  dbCache = getInitialSeed();
-  for (const account of dbCache.users) account.wallet_balance = 0;
-  dbCache.demo_balances_cleared = true;
-  saveDatabase(dbCache);
+
+  if (!dbCache) throw new Error('VisPlay database state was not initialized.');
+  const { error: writeError } = await client.from(SUPABASE_TABLE).upsert({
+    id: 'main', data: dbCache, updated_at: new Date().toISOString(),
+  });
+  if (writeError) throw new Error('Unable to migrate the existing VisPlay database to Supabase: ' + writeError.message);
+}
+
+export function loadDatabase(): DatabaseSchema {
+  if (!dbCache) throw new Error('VisPlay database has not been initialized. Await initializeDatabase() before serving requests.');
   return dbCache;
 }
 
-export function saveDatabase(data: DatabaseSchema): void {
-  dbCache = data;
+function saveLocalDatabase(data: DatabaseSchema): void {
+  if (!fs.existsSync(path.dirname(DB_FILE))) fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
   const tempPath = `${DB_FILE}.tmp.${Date.now()}`;
   fs.writeFileSync(tempPath, JSON.stringify(data, null, 2), 'utf-8');
   fs.renameSync(tempPath, DB_FILE);
+}
+
+export async function saveDatabase(data: DatabaseSchema): Promise<void> {
+  dbCache = data;
+  const client = getSupabaseClient();
+  if (!client) {
+    saveLocalDatabase(data);
+    return;
+  }
+  const snapshot = JSON.parse(JSON.stringify(data)) as DatabaseSchema;
+  persistenceQueue = persistenceQueue.then(async () => {
+    const { error } = await client.from(SUPABASE_TABLE).upsert({
+      id: 'main', data: snapshot, updated_at: new Date().toISOString(),
+    });
+    if (error) throw new Error('Unable to save VisPlay state to Supabase: ' + error.message);
+  });
+  await persistenceQueue;
 }
 
 export const SUPER_ADMIN_EMAILS = [
