@@ -103,7 +103,7 @@ export const HomePage: React.FC<HomePageProps> = ({
     new Map(
       [featuredMovie, ...movies].filter((movie): movie is Movie => Boolean(movie))
         .filter(movie => !movie.is_bundle_only)
-        .map(movie => [movie.id, movie])
+        .map(movie => [movie.id, movie] as const)
     ).values()
   ).slice(0, 12);
   const [activeHeroIndex, setActiveHeroIndex] = useState(0);
