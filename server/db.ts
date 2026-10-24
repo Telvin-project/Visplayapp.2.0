@@ -247,6 +247,7 @@ export interface DatabaseSchema {
   notifications: Notification[];
   featured_movie_id?: string | null;
   featured_movie_backdrop?: string | null;
+  demo_balances_cleared?: boolean;
 }
 
 const DB_FILE = path.join(process.cwd(), 'data', 'visplay_db.json');
@@ -273,6 +274,15 @@ export function loadDatabase(): DatabaseSchema {
       // Merge any new seed movies if missing
       const initial = getInitialSeed();
       let changed = false;
+
+      // One-time cleanup of seeded/demo wallet balances for the live launch.
+      // The flag prevents later restarts from clearing genuine customer funds.
+      if (!dbCache!.demo_balances_cleared) {
+        for (const account of dbCache!.users) account.wallet_balance = 0;
+        dbCache!.demo_balances_cleared = true;
+        changed = true;
+      }
+
       for (const m of initial.movies) {
         if (!dbCache!.movies.some(existing => existing.id === m.id)) {
           dbCache!.movies.push(m);
@@ -308,6 +318,8 @@ export function loadDatabase(): DatabaseSchema {
     }
   }
   dbCache = getInitialSeed();
+  for (const account of dbCache.users) account.wallet_balance = 0;
+  dbCache.demo_balances_cleared = true;
   saveDatabase(dbCache);
   return dbCache;
 }
@@ -337,7 +349,7 @@ function getInitialSeed(): DatabaseSchema {
     full_name: 'Kelvin Usitaka',
     avatar_url: '/visplay-symbol.png',
     role: 'admin',
-    wallet_balance: 50000,
+    wallet_balance: 0,
     phone: '+2348012345678',
     created_at: new Date('2026-01-01T00:00:00Z').toISOString(),
   };
@@ -349,7 +361,7 @@ function getInitialSeed(): DatabaseSchema {
     full_name: 'Visibyl Admin Superuser',
     avatar_url: '/visplay-symbol.png',
     role: 'admin',
-    wallet_balance: 50000,
+    wallet_balance: 0,
     phone: '+2348012345678',
     created_at: new Date('2026-01-01T00:00:00Z').toISOString(),
   };
@@ -361,7 +373,7 @@ function getInitialSeed(): DatabaseSchema {
     full_name: 'Kunle Afolayan',
     avatar_url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
     role: 'creator',
-    wallet_balance: 42500,
+    wallet_balance: 0,
     phone: '+2348023456789',
     created_at: new Date('2026-01-10T00:00:00Z').toISOString(),
   };
@@ -387,7 +399,7 @@ function getInitialSeed(): DatabaseSchema {
     full_name: 'Nneka Adebayo',
     avatar_url: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80',
     role: 'creator',
-    wallet_balance: 31450,
+    wallet_balance: 0,
     phone: '+2348034567890',
     created_at: new Date('2026-01-15T00:00:00Z').toISOString(),
   };
@@ -413,7 +425,7 @@ function getInitialSeed(): DatabaseSchema {
     full_name: 'Tope Agro',
     avatar_url: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
     role: 'creator',
-    wallet_balance: 18700,
+    wallet_balance: 0,
     phone: '+2348045678901',
     created_at: new Date('2026-02-01T00:00:00Z').toISOString(),
   };
@@ -439,7 +451,7 @@ function getInitialSeed(): DatabaseSchema {
     full_name: 'Chidi Okafor',
     avatar_url: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80',
     role: 'viewer',
-    wallet_balance: 1500, // ₦1,500 test balance
+    wallet_balance: 0, // ₦1,500 test balance
     phone: '+2348056789012',
     created_at: new Date('2026-02-10T00:00:00Z').toISOString(),
   };
