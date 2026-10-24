@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { Navbar } from './components/Navbar';
 import { AuthModal } from './components/AuthModal';
@@ -23,6 +23,38 @@ const AppContent: React.FC = () => {
   const [selectedCreatorId, setSelectedCreatorId] = useState<string>('creator_01');
   const [selectedBundleId, setSelectedBundleId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const skipHistoryPush = useRef(false);
+
+  // Keep in-app navigation in browser history so Back returns to the previous VisPlay page.
+  useEffect(() => {
+    const currentState = { visplay: true, currentView, selectedMovieId, selectedCreatorId, selectedBundleId };
+    if (skipHistoryPush.current) {
+      skipHistoryPush.current = false;
+      window.history.replaceState(currentState, '', window.location.href);
+    } else {
+      window.history.pushState(currentState, '', window.location.href);
+    }
+  }, [currentView, selectedMovieId, selectedCreatorId, selectedBundleId]);
+
+  useEffect(() => {
+    const handlePopState = (event: PopStateEvent) => {
+      const state = event.state;
+      if (state?.visplay) {
+        skipHistoryPush.current = true;
+        setCurrentView(state.currentView || 'home');
+        if (state.selectedMovieId) setSelectedMovieId(state.selectedMovieId);
+        if (state.selectedCreatorId) setSelectedCreatorId(state.selectedCreatorId);
+        setSelectedBundleId(state.selectedBundleId ?? null);
+      } else {
+        // If browser history predates app navigation, keep the user inside VisPlay.
+        window.history.replaceState({ visplay: true, currentView: 'home', selectedMovieId, selectedCreatorId, selectedBundleId }, '', window.location.href);
+        skipHistoryPush.current = true;
+        setCurrentView('home');
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [selectedMovieId, selectedCreatorId, selectedBundleId]);
 
   const handleSelectMovie = (id: string) => {
     setSelectedMovieId(id);
