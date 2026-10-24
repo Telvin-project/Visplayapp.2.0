@@ -46,9 +46,19 @@ const AppContent: React.FC = () => {
         if (state.selectedCreatorId) setSelectedCreatorId(state.selectedCreatorId);
         setSelectedBundleId(state.selectedBundleId ?? null);
       } else {
-        // If browser history predates app navigation, keep the user inside VisPlay.
-        window.history.replaceState({ visplay: true, currentView: 'home', selectedMovieId, selectedCreatorId, selectedBundleId }, '', window.location.href);
+        // The browser may return to a history entry created before the SPA mounted.
+        // Add a fresh in-app entry instead of replacing the only safe entry, so the
+        // next Back gesture does not immediately leave VisPlay and land on a 404.
+        const homeState = {
+          visplay: true,
+          currentView: 'home',
+          selectedMovieId,
+          selectedCreatorId,
+          selectedBundleId: null,
+        };
+        window.history.pushState(homeState, '', window.location.href);
         skipHistoryPush.current = true;
+        setSelectedBundleId(null);
         setCurrentView('home');
       }
     };
