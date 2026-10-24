@@ -1,11 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Movie, EpisodeBundle, Livestream, Premiere, CreatorProfile } from '../types';
 import { MovieCard } from '../components/MovieCard';
-
-const resolveHeroImage = (url?: string | null) => {
-  if (!url) return '/posters/lagos_heist.jpg';
-  return url.startsWith('/uploads/') ? `https://visplayapp-2-0.onrender.com${url}` : url;
-};
 import {
   Play,
   Clock,
@@ -24,6 +19,11 @@ import {
   Film,
   Award,
 } from 'lucide-react';
+const resolveHeroImage = (url?: string | null) => {
+  if (!url) return '/posters/lagos_heist.jpg';
+  return url.startsWith('/uploads/') ? `https://visplayapp-2-0.onrender.com${url}` : url;
+};
+
 
 interface HomePageProps {
   onSelectMovie: (id: string) => void;
