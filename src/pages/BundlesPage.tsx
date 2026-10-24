@@ -108,13 +108,13 @@ export const BundlesPage: React.FC<BundlesPageProps> = ({
         <div className="max-w-2xl space-y-3">
           <div className="flex items-center gap-2 text-xs font-semibold text-fuchsia-300">
             <Tv className="w-4 h-4" />
-            <span className="uppercase tracking-wider">Mandatory Bundle Pricing</span>
+            <span className="uppercase tracking-wider">Series Collection</span>
           </div>
           <h1 className="text-2xl sm:text-4xl font-extrabold font-display text-white">
-            10-Episode Serialized Series (₦700 Total)
+            Explore Serialized Series
           </h1>
           <p className="text-sm text-slate-300 leading-relaxed">
-            Get complete season access for ₦700 total (instead of ₦1,000 individually). All 10 episodes unlock instantly for unlimited HD playback with 85% revenue delivered directly to the production house.
+            Explore available episodes and unlock a series when you are ready to watch.
           </p>
         </div>
       </div>
@@ -133,7 +133,7 @@ export const BundlesPage: React.FC<BundlesPageProps> = ({
                 <div className="flex items-center gap-2 text-xs text-fuchsia-300 font-semibold">
                   <span>10 Episodes Included</span>
                   <span>·</span>
-                  <span className="font-mono text-cyan-300">₦700 Total</span>
+                  
                   {activeBundle.is_purchased && (
                     <span className="flex items-center gap-1 text-emerald-400 font-bold bg-emerald-950/80 px-2 py-0.5 rounded">
                       <CheckCircle2 className="w-3 h-3" />
@@ -174,7 +174,7 @@ export const BundlesPage: React.FC<BundlesPageProps> = ({
                   className="w-full sm:w-auto px-6 py-3.5 rounded-xl font-bold text-sm bg-gradient-to-r from-fuchsia-600 to-cyan-500 hover:from-fuchsia-500 hover:to-cyan-400 text-white shadow-xl shadow-fuchsia-950/30 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
                 >
                   <Unlock className="w-4 h-4" />
-                  <span>Unlock All 10 Episodes for ₦700</span>
+                  <span>Unlock All 10 Episodes</span>
                 </button>
               )}
             </div>

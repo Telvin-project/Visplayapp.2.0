@@ -290,10 +290,6 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
                 <span>You receive ₦85 per ₦100 movie unlock. Platform takes 15% maintenance.</span>
               </div>
               <div className="p-3 bg-slate-900 rounded-xl border border-slate-800">
-                <span className="text-fuchsia-400 font-bold block mb-1">₦700 Series Bundles</span>
-                <span>Serialized 10-episode packages earn ₦595 (85%) per season unlock.</span>
-              </div>
-              <div className="p-3 bg-slate-900 rounded-xl border border-slate-800">
                 <span className="text-emerald-400 font-bold block mb-1">Monthly Payouts</span>
                 <span>Automatic reconciliation and monthly bank wire disbursements to your Nigerian account.</span>
               </div>

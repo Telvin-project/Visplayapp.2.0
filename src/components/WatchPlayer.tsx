@@ -114,6 +114,19 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
   }, [movie.video_url]);
 
   useEffect(() => {
+    // Try to start playback when the selected movie is ready.
+    // Mobile browsers may still require a tap because of autoplay restrictions.
+    const video = videoRef.current;
+    if (!video) return;
+    const tryAutoplay = () => {
+      video.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
+    };
+    if (video.readyState >= 2) tryAutoplay();
+    else video.addEventListener('canplay', tryAutoplay, { once: true });
+    return () => video.removeEventListener('canplay', tryAutoplay);
+  }, [movie.id, movie.video_url]);
+
+  useEffect(() => {
     // Fetch initial comments
     fetchComments();
 
@@ -490,7 +503,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
               </h3>
               <p className="text-xs text-slate-300 mb-5">
                 Enjoyed the first 5 minutes? Unlock the complete film for only{' '}
-                <strong className="text-cyan-300 font-mono text-sm">₦100</strong>. 85% goes directly to the African creator.
+                <strong className="text-cyan-300 font-mono text-sm">₦100</strong>.
               </p>
 
               {/* Wallet info */}
