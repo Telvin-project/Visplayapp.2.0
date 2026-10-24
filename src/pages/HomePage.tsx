@@ -105,7 +105,7 @@ export const HomePage: React.FC<HomePageProps> = ({
     <div className="space-y-10 pb-16">
       {/* ---------------- CINEMATIC HERO SPOTLIGHT ---------------- */}
       {heroMovie && !searchQuery && (
-        <div className="relative rounded-3xl overflow-hidden border border-slate-800/80 bg-gradient-to-r from-slate-950 via-[#0d121d] to-slate-950 shadow-2xl">
+        <div className="relative min-h-[380px] sm:min-h-[480px] overflow-hidden border-y border-slate-800/80 bg-gradient-to-r from-slate-950 via-[#0d121d] to-slate-950 shadow-2xl">
           {/* Backdrop Image with Scrim */}
           <div className="absolute inset-0">
             <img
@@ -155,8 +155,6 @@ export const HomePage: React.FC<HomePageProps> = ({
                 <Clock className="w-3.5 h-3.5 text-cyan-400" />
                 <span>5-Minute Free Preview</span>
               </span>
-              <span>·</span>
-              <span className="text-fuchsia-400 font-medium">85% to Filmmaker</span>
             </div>
 
             {/* Action Buttons */}
