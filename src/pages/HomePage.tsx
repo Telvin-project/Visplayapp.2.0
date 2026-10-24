@@ -96,13 +96,7 @@ export const HomePage: React.FC<HomePageProps> = ({
     }
   };
 
-  const genres = [
-    'All',
-    'Action & Crime',
-    'Historical & Epic',
-    'Romance & Drama',
-    'Sci-Fi & Thriller',
-  ];
+  const genres = ['All', 'Drama', 'Comedy', 'Action', 'Romance', 'Thriller', 'Horror', 'Documentary', 'Series'];
 
   // Lead spotlight film from super admin setting or fallback
   const heroMovie = featuredMovie || movies.find(m => m.id === 'mov_lagos_syndicate') || movies[0];
@@ -187,40 +181,6 @@ export const HomePage: React.FC<HomePageProps> = ({
         </div>
       )}
 
-      {/* ---------------- PLATFORM HIGHLIGHTS BAR ---------------- */}
-      {!searchQuery && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-4 bg-slate-900/60 border border-slate-800/80 rounded-2xl text-xs">
-          <div className="flex items-center gap-2.5 p-2">
-            <Coins className="w-5 h-5 text-cyan-400 shrink-0" />
-            <div>
-              <span className="block font-bold text-white text-xs">₦100 Rate</span>
-              <span className="text-[11px] text-slate-400">Single movie full unlock</span>
-            </div>
-          </div>
-          <div className="flex items-center gap-2.5 p-2">
-            <Tv className="w-5 h-5 text-fuchsia-400 shrink-0" />
-            <div>
-              <span className="block font-bold text-white text-xs">₦700 Bundles</span>
-              <span className="text-[11px] text-slate-400">10-episode series pass</span>
-            </div>
-          </div>
-          <div className="flex items-center gap-2.5 p-2">
-            <Clock className="w-5 h-5 text-amber-400 shrink-0" />
-            <div>
-              <span className="block font-bold text-white text-xs">5-Min Free Preview</span>
-              <span className="text-[11px] text-slate-400">Watch before you unlock</span>
-            </div>
-          </div>
-          <div className="flex items-center gap-2.5 p-2">
-            <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
-            <div>
-              <span className="block font-bold text-white text-xs">85% Filmmaker Share</span>
-              <span className="text-[11px] text-slate-400">Monthly direct payouts</span>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* ---------------- DISCOVERY & FILTER CONTROLS ---------------- */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
         {/* Category Sorting Pills */}
@@ -291,100 +251,50 @@ export const HomePage: React.FC<HomePageProps> = ({
         </div>
       </div>
 
-      {/* ---------------- 10-EPISODE BUNDLES SPOTLIGHT (₦700) ---------------- */}
-      {bundles.length > 0 && !searchQuery && (
-        <section className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Tv className="w-5 h-5 text-fuchsia-400" />
-              <h2 className="text-lg sm:text-xl font-bold font-display text-white">
-                10-Episode Serialized Sagas
-              </h2>
-            </div>
-            <span className="text-xs text-fuchsia-300 font-medium">₦700 Complete Season Pass</span>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {bundles.map((bundle) => (
-              <div
-                key={bundle.id}
-                onClick={() => onSelectBundle(bundle.id)}
-                className="group relative rounded-3xl bg-gradient-to-br from-[#0e1424] to-[#120f24] border border-fuchsia-900/40 hover:border-fuchsia-500/60 p-5 sm:p-6 transition-all cursor-pointer shadow-lg hover:shadow-fuchsia-950/30 flex flex-col sm:flex-row gap-5 items-center"
-              >
-                <div className="relative w-full sm:w-36 aspect-[3/4] shrink-0 rounded-2xl overflow-hidden bg-slate-900 shadow-md">
-                  <img
-                    src={bundle.poster_url || '/posters/lagos_heist.jpg'}
-                    alt={bundle.title}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                  />
-                  <span className="absolute top-2 left-2 text-[10px] font-bold text-white bg-fuchsia-600/90 px-2 py-0.5 rounded-md backdrop-blur-sm">
-                    10 EPISODES
-                  </span>
-                </div>
-
-                <div className="flex-1 space-y-2.5 text-center sm:text-left">
-                  <div className="flex items-center justify-center sm:justify-start gap-2 text-[11px] text-fuchsia-300">
-                    <span className="font-semibold">Full Series Bundle</span>
-                    <span>·</span>
-                    <span>10 Episodes</span>
-                    <span>·</span>
-                    <span className="font-bold font-mono text-cyan-300">₦700 Total</span>
-                  </div>
-
-                  <h3 className="text-base sm:text-lg font-bold text-white group-hover:text-fuchsia-300 transition-colors">
-                    {bundle.title}
-                  </h3>
-
-                  <p className="text-xs text-slate-300 line-clamp-2 leading-relaxed">
-                    {bundle.description}
-                  </p>
-
-                  <div className="pt-2 flex items-center justify-center sm:justify-start gap-2">
-                    <span className="py-2 px-4 rounded-xl text-xs font-bold bg-fuchsia-600 hover:bg-fuchsia-500 text-white flex items-center gap-1.5 shadow-md">
-                      <Play className="w-3.5 h-3.5 fill-white" />
-                      <span>{bundle.is_purchased ? 'Watch Series' : 'Explore Bundle (₦700)'}</span>
-                    </span>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {/* ---------------- MAIN MOVIE DISCOVERY SHELF ---------------- */}
-      <section className="space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Flame className="w-5 h-5 text-cyan-400" />
-            <h2 className="text-lg sm:text-xl font-bold font-display text-white">
-              {searchQuery ? `Search Results for "${searchQuery}"` : 'Nollywood Blockbusters & New Releases'}
-            </h2>
-          </div>
-          <span className="text-xs text-slate-400 font-mono">₦100 per movie</span>
-        </div>
-
+      {/* ---------------- MAIN MOVIE DISCOVERY SHELVES ---------------- */}
+      <section className="space-y-8">
         {loading ? (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-            {[1, 2, 3, 4].map((i) => (
-              <div key={i} className="aspect-[3/4] rounded-2xl bg-slate-900/60 animate-pulse border border-slate-800" />
-            ))}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-5">
+            {[1, 2, 3, 4, 5].map((i) => <div key={i} className="aspect-[2/3] rounded-lg bg-slate-900/60 animate-pulse border border-slate-800" />)}
           </div>
         ) : movies.length === 0 ? (
-          <div className="py-12 text-center bg-[#0d121d] rounded-3xl border border-slate-800">
+          <div className="py-12 text-center bg-[#0d121d] rounded-xl border border-slate-800">
             <p className="text-sm text-slate-400">No movies found matching your selection.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-6">
-            {movies.map((movie) => (
-              <MovieCard
-                key={movie.id}
-                movie={movie}
-                onSelectMovie={onSelectMovie}
-                onSelectCreator={onSelectCreator}
-              />
-            ))}
-          </div>
+          <>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-lg sm:text-2xl font-bold text-white">{searchQuery ? `Search Results for "${searchQuery}"` : 'Trending Now'}</h2>
+                <span className="text-xs text-slate-400 shrink-0">₦100 per movie</span>
+              </div>
+              <div className="flex gap-3 sm:gap-5 overflow-x-auto pb-3 snap-x snap-mandatory">
+                {movies.map((movie) => <div key={movie.id} className="w-[42vw] sm:w-[27vw] md:w-[21vw] lg:w-[16vw] max-w-[240px] shrink-0 snap-start"><MovieCard movie={movie} onSelectMovie={onSelectMovie} onSelectCreator={onSelectCreator} /></div>)}
+              </div>
+            </div>
+            {!searchQuery && genres.filter(g => g !== 'All').map((genre) => {
+              const matching = movies.filter((movie) => {
+                const value = `${movie.genre || ''} ${movie.title || ''} ${movie.synopsis || ''}`.toLowerCase();
+                const key = genre.toLowerCase();
+                if (key === 'series') return Boolean(movie.is_bundle_only || /series|episode|season/.test(value));
+                if (key === 'action') return /action|crime|adventure/.test(value);
+                if (key === 'drama') return /drama|historical|epic/.test(value);
+                if (key === 'comedy') return /comedy|funny|comedic/.test(value);
+                if (key === 'romance') return /romance|romantic|love/.test(value);
+                if (key === 'thriller') return /thriller|suspense|crime/.test(value);
+                if (key === 'horror') return /horror|scary|supernatural/.test(value);
+                if (key === 'documentary') return /documentary|documentaries|real story/.test(value);
+                return value.includes(key);
+              });
+              if (!matching.length) return null;
+              return <div key={genre} className="space-y-3">
+                <h2 className="text-lg sm:text-xl font-bold text-white">{genre}</h2>
+                <div className="flex gap-3 sm:gap-5 overflow-x-auto pb-3 snap-x snap-mandatory">
+                  {matching.map((movie) => <div key={movie.id} className="w-[42vw] sm:w-[27vw] md:w-[21vw] lg:w-[16vw] max-w-[240px] shrink-0 snap-start"><MovieCard movie={movie} onSelectMovie={onSelectMovie} onSelectCreator={onSelectCreator} /></div>)}
+                </div>
+              </div>;
+            })}
+          </>
         )}
       </section>
 
@@ -398,7 +308,7 @@ export const HomePage: React.FC<HomePageProps> = ({
                 Featured Filmmakers & Creator Channels
               </h2>
             </div>
-            <span className="text-xs text-slate-400">85% Creator Box-Office</span>
+            
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -500,26 +410,6 @@ export const HomePage: React.FC<HomePageProps> = ({
         </section>
       )}
 
-      {/* ---------------- CREATOR REVENUE PROMISE FOOTER BANNER ---------------- */}
-      <div className="p-6 sm:p-8 rounded-3xl bg-gradient-to-r from-cyan-950/40 via-slate-900 to-fuchsia-950/40 border border-slate-800/80 flex flex-col md:flex-row items-center justify-between gap-6">
-        <div className="space-y-1 text-center md:text-left">
-          <div className="flex items-center justify-center md:justify-start gap-2 text-cyan-400 text-xs font-semibold">
-            <ShieldCheck className="w-4 h-4" />
-            <span>Fair African Creator Economics</span>
-          </div>
-          <h3 className="text-lg font-bold text-white">Filmmakers Keep 85% of All Box-Office Coins</h3>
-          <p className="text-xs text-slate-400 max-w-xl">
-            VisPlay charges only a 15% platform maintenance fee. Support authentic Nollywood storytelling directly from Lagos, Abuja, and Accra.
-          </p>
-        </div>
-
-        <div className="flex items-center gap-3 shrink-0">
-          <div className="text-right hidden sm:block">
-            <span className="block text-xs text-slate-400 font-mono">VisPlay by</span>
-            <span className="text-sm font-bold text-white">Visibyl Technologies</span>
-          </div>
-        </div>
-      </div>
     </div>
   );
 };
