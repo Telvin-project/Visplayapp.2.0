@@ -950,89 +950,136 @@ async function startServer() {
   // ₦100 Movie | ₦700 10-Episode Bundle | 85% Creator / 15% Platform Split
   // -------------------------------------------------------------
 
-  // Initialize wallet deposit or movie payment
-  app.post('/api/wallet/deposit/initialize', requireAuth, (req: AuthenticatedRequest, res: Response) => {
-    const { amount_ngn } = req.body;
-    const amount = parseInt(amount_ngn, 10);
-    if (isNaN(amount) || amount < 100) {
+  // Initialize wallet deposit with Paystack. Secret keys stay on the server.
+  app.post('/api/wallet/deposit/initialize', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    const amount = Number(req.body?.amount_ngn);
+    if (!Number.isSafeInteger(amount) || amount < 100) {
       res.status(400).json({ error: 'Minimum deposit amount is ₦100.' });
       return;
     }
 
-    const reference = `VIS_DEP_${Date.now()}_${uuidv4().substring(0, 6).toUpperCase()}`;
-    const db = loadDatabase();
+    const secretKey = process.env.PAYSTACK_SECRET_KEY;
+    if (!secretKey) {
+      res.status(503).json({ error: 'Paystack is not configured yet. Add PAYSTACK_SECRET_KEY to the backend environment.' });
+      return;
+    }
 
-    const pendingTx: WalletTransaction = {
-      id: `tx_${uuidv4().substring(0, 8)}`,
-      user_id: req.user!.id,
-      amount_ngn: amount,
-      type: 'deposit',
-      status: 'pending',
-      reference,
-      payment_method: 'paystack',
-      description: `Wallet Funding (₦${amount.toLocaleString()})`,
-      created_at: new Date().toISOString(),
-    };
+    const reference = `VIS_DEP_${Date.now()}_${uuidv4().substring(0, 8).toUpperCase()}`;
+    const callbackUrl = process.env.PAYSTACK_CALLBACK_URL || 'https://visplayapp20.vercel.app/';
+    try {
+      const response = await fetch('https://api.paystack.co/transaction/initialize', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${secretKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email: req.user!.email,
+          amount: amount * 100,
+          currency: 'NGN',
+          reference,
+          callback_url: callbackUrl,
+          metadata: { user_id: req.user!.id, purpose: 'wallet_deposit' },
+        }),
+      });
+      const result = await response.json() as any;
+      if (!response.ok || !result.status || !result.data?.authorization_url) {
+        console.error('Paystack initialization failed:', result?.message || response.status);
+        res.status(502).json({ error: 'Paystack could not start checkout. Please try again.' });
+        return;
+      }
 
-    db.transactions.push(pendingTx);
-    saveDatabase(db);
-
-    res.json({
-      reference,
-      amount_ngn: amount,
-      user_email: req.user!.email,
-      public_key: process.env.PAYSTACK_PUBLIC_KEY || 'pk_test_visplay_sandbox_994829',
-      message: 'Deposit initialized. Ready for Paystack checkout verification.',
-    });
+      const db = loadDatabase();
+      const pendingTx: WalletTransaction = {
+        id: `tx_${uuidv4().substring(0, 8)}`,
+        user_id: req.user!.id,
+        amount_ngn: amount,
+        type: 'deposit',
+        status: 'pending',
+        reference,
+        payment_method: 'paystack',
+        description: `Wallet Funding (₦${amount.toLocaleString()})`,
+        metadata: { paystack_access_code: result.data.access_code },
+        created_at: new Date().toISOString(),
+      };
+      db.transactions.push(pendingTx);
+      saveDatabase(db);
+      res.json({ reference, authorization_url: result.data.authorization_url });
+    } catch (error) {
+      console.error('Paystack initialization error:', error);
+      res.status(502).json({ error: 'Unable to connect to Paystack. Please try again.' });
+    }
   });
 
-  // Verify deposit payment (Paystack webhook or sandbox verification)
-  app.post('/api/wallet/deposit/verify', requireAuth, (req: AuthenticatedRequest, res: Response) => {
-    const { reference } = req.body;
+  // Verify against Paystack's server API; never trust a client-supplied reference alone.
+  app.post('/api/wallet/deposit/verify', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    const reference = String(req.body?.reference || '').trim();
     if (!reference) {
       res.status(400).json({ error: 'Transaction reference is required.' });
       return;
     }
+    const secretKey = process.env.PAYSTACK_SECRET_KEY;
+    if (!secretKey) {
+      res.status(503).json({ error: 'Paystack is not configured on the backend.' });
+      return;
+    }
 
     const db = loadDatabase();
-    const tx = db.transactions.find(t => t.reference === reference && t.user_id === req.user!.id);
+    const tx = db.transactions.find(t => t.reference === reference && t.user_id === req.user!.id && t.type === 'deposit');
     if (!tx) {
       res.status(404).json({ error: 'Transaction record not found.' });
       return;
     }
-
     if (tx.status === 'successful') {
-      res.json({ success: true, message: 'Transaction already verified.', wallet_balance: req.user!.wallet_balance });
+      const currentUser = db.users.find(u => u.id === req.user!.id);
+      res.json({ success: true, already_verified: true, wallet_balance: currentUser?.wallet_balance || 0 });
       return;
     }
 
-    // In production, verify with Paystack REST API (https://api.paystack.co/transaction/verify/:reference)
-    // Server securely confirms and reconciles
-    tx.status = 'successful';
+    try {
+      const response = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, {
+        headers: { Authorization: `Bearer ${secretKey}` },
+      });
+      const result = await response.json() as any;
+      const payment = result?.data;
+      if (!response.ok || !result?.status || payment?.status !== 'success') {
+        res.status(402).json({ error: 'Paystack has not confirmed a successful payment yet.' });
+        return;
+      }
+      if (payment.reference !== tx.reference || payment.currency !== 'NGN' || Number(payment.amount) !== tx.amount_ngn * 100 ||
+          (payment.metadata?.user_id && payment.metadata.user_id !== req.user!.id)) {
+        res.status(400).json({ error: 'Payment details do not match this wallet deposit.' });
+        return;
+      }
 
-    // Credit user's wallet
-    const user = db.users.find(u => u.id === req.user!.id);
-    if (user) {
-      user.wallet_balance = (user.wallet_balance || 0) + tx.amount_ngn;
+      // Re-check transaction state before crediting to prevent duplicate credits.
+      const latestTx = db.transactions.find(t => t.reference === reference && t.user_id === req.user!.id);
+      if (!latestTx || latestTx.status === 'successful') {
+        const currentUser = db.users.find(u => u.id === req.user!.id);
+        res.json({ success: true, already_verified: true, wallet_balance: currentUser?.wallet_balance || 0 });
+        return;
+      }
+      latestTx.status = 'successful';
+      const user = db.users.find(u => u.id === req.user!.id);
+      if (!user) {
+        res.status(404).json({ error: 'User not found.' });
+        return;
+      }
+      user.wallet_balance = (user.wallet_balance || 0) + latestTx.amount_ngn;
+      db.notifications.push({
+        id: `notif_${uuidv4().substring(0, 8)}`,
+        user_id: user.id,
+        title: 'Wallet Funded Successfully',
+        message: `₦${latestTx.amount_ngn.toLocaleString()} has been credited to your VisPlay wallet.`,
+        is_read: false,
+        created_at: new Date().toISOString(),
+      });
+      saveDatabase(db);
+      res.json({ success: true, wallet_balance: user.wallet_balance, transaction: latestTx });
+    } catch (error) {
+      console.error('Paystack verification error:', error);
+      res.status(502).json({ error: 'Could not verify payment with Paystack. Please retry shortly.' });
     }
-
-    // Add notification
-    db.notifications.push({
-      id: `notif_${uuidv4().substring(0, 8)}`,
-      user_id: req.user!.id,
-      title: 'Wallet Funded Successfully',
-      message: `₦${tx.amount_ngn.toLocaleString()} has been credited to your VisPlay wallet. Balance: ₦${user?.wallet_balance.toLocaleString()}.`,
-      is_read: false,
-      created_at: new Date().toISOString(),
-    });
-
-    saveDatabase(db);
-    res.json({
-      success: true,
-      message: `Successfully credited ₦${tx.amount_ngn.toLocaleString()} to your wallet.`,
-      wallet_balance: user?.wallet_balance || 0,
-      transaction: tx,
-    });
   });
 
   // Purchase Individual Movie (₦100)
