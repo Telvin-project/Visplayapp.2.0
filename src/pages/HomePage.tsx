@@ -116,7 +116,7 @@ export const HomePage: React.FC<HomePageProps> = ({
     if (heroSlides.length < 2 || searchQuery) return;
     const timer = window.setInterval(() => {
       setActiveHeroIndex(index => (index + 1) % heroSlides.length);
-    }, 1500);
+    }, 2500);
     return () => window.clearInterval(timer);
   }, [heroSlides.length, searchQuery]);
 
@@ -135,7 +135,7 @@ export const HomePage: React.FC<HomePageProps> = ({
                 className={`absolute inset-0 transition-opacity duration-700 ease-in-out ${index === activeHeroIndex ? 'opacity-100' : 'opacity-0'}`}
               >
                 <img
-                  src={movie.backdrop_url || movie.poster_url || '/posters/lagos_heist.jpg'}
+                  src={movie.poster_url || movie.backdrop_url || '/posters/lagos_heist.jpg'}
                   alt=""
                   className="h-full w-full scale-105 object-cover object-center"
                 />
