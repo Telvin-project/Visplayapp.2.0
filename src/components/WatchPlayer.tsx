@@ -28,10 +28,11 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
-const RENDER_MEDIA_ORIGIN = 'https://visplayapp-2-0.onrender.com';
 const resolveMediaUrl = (url?: string | null) => {
   if (!url) return '';
-  if (url.startsWith('/uploads/')) return `${RENDER_MEDIA_ORIGIN}${url}`;
+  // Use the Vercel /uploads rewrite so media is served through the same origin
+  // as the app instead of hard-coding the backend host in every player.
+  if (url.startsWith('/uploads/')) return url;
   return url;
 };
 
