@@ -4,6 +4,7 @@ import fs from 'fs';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import multer from 'multer';
+import { createClient } from '@supabase/supabase-js';
 import cookieParser from 'cookie-parser';
 import { v4 as uuidv4 } from 'uuid';
 import {
@@ -69,6 +70,56 @@ const upload = multer({
   storage,
   limits: { fileSize: 250 * 1024 * 1024 }, // 250MB limit
 });
+
+// Movie media is uploaded directly to Supabase Storage so videos and posters
+// survive Render redeploys. The service-role key is server-only.
+const movieMediaUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 250 * 1024 * 1024 }, // 250MB per file
+});
+
+const MEDIA_BUCKET = 'visplay-media';
+let mediaBucketReady: Promise<void> | null = null;
+
+function getMediaStorageClient() {
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error('Persistent media storage is not configured on the server.');
+  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+}
+
+async function ensureMediaBucket() {
+  if (!mediaBucketReady) {
+    mediaBucketReady = (async () => {
+      const client = getMediaStorageClient();
+      const { error } = await client.storage.createBucket(MEDIA_BUCKET, {
+        public: true,
+        fileSizeLimit: 250 * 1024 * 1024,
+      });
+      if (error && !/already exists/i.test(error.message)) {
+        throw new Error('Unable to prepare permanent media storage: ' + error.message);
+      }
+    })().catch(error => {
+      mediaBucketReady = null;
+      throw error;
+    });
+  }
+  await mediaBucketReady;
+}
+
+async function storeMovieMedia(file: Express.Multer.File, folder: 'videos' | 'posters') {
+  await ensureMediaBucket();
+  const client = getMediaStorageClient();
+  const extension = path.extname(file.originalname) || (folder === 'videos' ? '.mp4' : '.jpg');
+  const objectPath = `${folder}/${Date.now()}-${uuidv4()} `.trim() + extension;
+  const { error } = await client.storage.from(MEDIA_BUCKET).upload(objectPath, file.buffer, {
+    contentType: file.mimetype || (folder === 'videos' ? 'video/mp4' : 'image/jpeg'),
+    upsert: false,
+    cacheControl: '31536000',
+  });
+  if (error) throw new Error('Media upload failed: ' + error.message);
+  return client.storage.from(MEDIA_BUCKET).getPublicUrl(objectPath).data.publicUrl;
+}
 
 export interface AuthenticatedRequest extends Request {
   user?: User;
@@ -762,7 +813,7 @@ async function startServer() {
   app.post(
     '/api/movies/upload',
     requireCreator,
-    upload.fields([
+    movieMediaUpload.fields([
       { name: 'video', maxCount: 1 },
       { name: 'poster', maxCount: 1 },
     ]),
@@ -792,13 +843,19 @@ async function startServer() {
       const creatorName = creatorProfile ? creatorProfile.channel_name : req.user!.full_name;
       const creatorAvatar = creatorProfile ? creatorProfile.channel_avatar_url : req.user!.avatar_url;
 
-      const videoUrl = videoFile
-        ? `/uploads/videos/${videoFile.filename}`
-        : 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4';
+      let videoUrl = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4';
+      let posterUrl = '/posters/lagos_heist.jpg';
 
-      const posterUrl = posterFile
-        ? `/uploads/posters/${posterFile.filename}`
-        : '/posters/lagos_heist.jpg';
+      try {
+        if (videoFile) videoUrl = await storeMovieMedia(videoFile, 'videos');
+        if (posterFile) posterUrl = await storeMovieMedia(posterFile, 'posters');
+      } catch (storageError) {
+        console.error('Permanent movie media upload failed:', storageError);
+        res.status(503).json({
+          error: 'The video or poster could not be saved permanently. Please try again later.',
+        });
+        return;
+      }
 
       const newMovie: Movie = {
         id: `mov_${uuidv4().substring(0, 8)}`,
