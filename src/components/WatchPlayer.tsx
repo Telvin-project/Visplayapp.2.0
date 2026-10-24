@@ -28,6 +28,13 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
+const RENDER_MEDIA_ORIGIN = 'https://visplayapp-2-0.onrender.com';
+const resolveMediaUrl = (url?: string | null) => {
+  if (!url) return '';
+  if (url.startsWith('/uploads/')) return `${RENDER_MEDIA_ORIGIN}${url}`;
+  return url;
+};
+
 interface WatchPlayerProps {
   movie: Movie;
   creator: CreatorProfile | null;
@@ -57,6 +64,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
   const [isPiPSupported, setIsPiPSupported] = useState(false);
   const [isPiPActive, setIsPiPActive] = useState(false);
   const [isVideoReady, setIsVideoReady] = useState(false);
+  const [videoLoadError, setVideoLoadError] = useState(false);
   const [pipNotice, setPipNotice] = useState<string | null>(null);
   const [showControls, setShowControls] = useState(true);
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -518,8 +526,8 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       >
         <video
           ref={videoRef}
-          src={movie.video_url}
-          poster={movie.backdrop_url || movie.poster_url}
+          src={resolveMediaUrl(movie.video_url)}
+          poster={resolveMediaUrl(movie.poster_url) || resolveMediaUrl(movie.backdrop_url)}
           className="w-full h-full object-contain cursor-pointer"
           playsInline
           width={1280}
@@ -533,13 +541,23 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
               setDuration(videoRef.current.duration);
             }
           }}
-          onCanPlay={() => setIsVideoReady(true)}
+          onCanPlay={() => { setIsVideoReady(true); setVideoLoadError(false); }}
+          onError={() => { setIsPlaying(false); setIsVideoReady(false); setVideoLoadError(true); }}
           onEnded={() => {
             setIsPlaying(false);
             trackViewingEvent(duration, true, true);
           }}
           onClick={handlePlayPause}
         />
+
+        {videoLoadError && (
+          <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-black/90 px-6 text-center">
+            <Film className="h-10 w-10 text-rose-300" />
+            <p className="text-sm font-semibold text-white">This video could not be loaded.</p>
+            <p className="max-w-md text-xs text-slate-300">Check your connection and try again. If it still fails, the uploaded video file may no longer be available on the server.</p>
+            <button type="button" onClick={() => { setVideoLoadError(false); if (videoRef.current) { videoRef.current.load(); videoRef.current.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false)); } }} className="rounded-lg bg-white px-4 py-2 text-xs font-bold text-black">Try again</button>
+          </div>
+        )}
 
         {/* Picture-in-Picture notice/toast */}
         {pipNotice && (
