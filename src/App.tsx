@@ -54,7 +54,7 @@ const AppContent: React.FC = () => {
       />
 
       {/* Main Viewport Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-20 md:pb-12">
+      <main className="flex-1 w-full mx-auto px-3 sm:px-5 lg:px-8 pt-4 sm:pt-6 pb-20 md:pb-12">
         {currentView === 'home' && (
           <HomePage
             onSelectMovie={handleSelectMovie}
@@ -131,14 +131,10 @@ const AppContent: React.FC = () => {
             <span className="text-slate-300 font-medium">Great Movies. Small Coins. Big Entertainment.</span>
           </div>
 
-          <div className="flex flex-wrap items-center justify-center gap-4 text-[11px] text-slate-400">
-            <span>₦100 Movie Rate</span>
+          <div className="flex flex-wrap items-center justify-center gap-3 text-[11px] text-slate-400">
+            <span>₦100 per movie</span>
             <span>·</span>
-            <span>₦700 10-Episode Series</span>
-            <span>·</span>
-            <span className="text-cyan-400">85% Filmmaker Share</span>
-            <span>·</span>
-            <span>Monthly Payouts</span>
+            <span>5-minute free preview</span>
             <span>·</span>
             <span>Visibyl Technologies</span>
           </div>
