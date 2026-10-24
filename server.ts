@@ -232,7 +232,7 @@ async function startServer() {
         full_name: full_name?.trim() || cleanEmail.split('@')[0],
         avatar_url: avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(cleanEmail)}`,
         role: role,
-        wallet_balance: isSuperAdmin ? 50000 : 500, // Welcome ₦500 bonus coins for new viewers (50k for super admin)
+        wallet_balance: 0, // Live accounts always start with zero wallet balance.
         phone: '',
         created_at: new Date().toISOString(),
       };
@@ -248,9 +248,16 @@ async function startServer() {
       }
     }
 
-    // Check creator status
-    const creatorProfile = db.creator_profiles.find(cp => cp.user_id === user!.id);
-    if (creatorProfile && creatorProfile.status === 'approved' && user.role !== 'admin') {
+    // Keep creator access attached to the same email if the internal user ID changes.
+    let creatorProfile = db.creator_profiles.find(cp => cp.user_id === user!.id) || null;
+    if (!creatorProfile) {
+      creatorProfile = db.creator_profiles.find(cp => {
+        const owner = db.users.find(candidate => candidate.id === cp.user_id);
+        return owner?.email?.toLowerCase() === cleanEmail;
+      }) || null;
+      if (creatorProfile) creatorProfile.user_id = user!.id;
+    }
+    if (creatorProfile?.status === 'approved' && user.role !== 'admin') {
       user.role = 'creator';
     }
 
@@ -279,9 +286,22 @@ async function startServer() {
       res.json({ user: null });
       return;
     }
-    const creatorProfile = db.creator_profiles.find(cp => cp.user_id === freshUser.id);
+
+    // Recover approved creator access by email if an internal user ID changed.
+    let creatorProfile = db.creator_profiles.find(cp => cp.user_id === freshUser.id) || null;
+    if (!creatorProfile) {
+      creatorProfile = db.creator_profiles.find(cp => {
+        const owner = db.users.find(candidate => candidate.id === cp.user_id);
+        return owner?.email?.toLowerCase() === freshUser.email.toLowerCase();
+      }) || null;
+      if (creatorProfile) creatorProfile.user_id = freshUser.id;
+    }
+    if (creatorProfile?.status === 'approved' && freshUser.role !== 'admin') {
+      freshUser.role = 'creator';
+    }
+    saveDatabase(db);
     const { password_hash: _, ...safeUser } = freshUser;
-    res.json({ user: safeUser, creator_profile: creatorProfile || null });
+    res.json({ user: safeUser, creator_profile: creatorProfile });
   });
 
   app.post('/api/auth/logout', (req: Request, res: Response) => {
