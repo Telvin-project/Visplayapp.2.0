@@ -2,6 +2,11 @@ import React from 'react';
 import { Movie } from '../types';
 import { Play, Clock, CheckCircle2, Eye, Heart } from 'lucide-react';
 
+const resolvePosterUrl = (url?: string | null) => {
+  if (!url) return '/posters/lagos_heist.jpg';
+  return url.startsWith('/uploads/') ? `https://visplayapp-2-0.onrender.com${url}` : url;
+};
+
 interface MovieCardProps {
   movie: Movie;
   onSelectMovie: (id: string) => void;
@@ -25,7 +30,7 @@ export const MovieCard: React.FC<MovieCardProps> = ({ movie, onSelectMovie, onSe
         className="relative aspect-[3/4] w-full overflow-hidden bg-slate-900 cursor-pointer"
       >
         <img
-          src={movie.poster_url || '/posters/lagos_heist.jpg'}
+          src={resolvePosterUrl(movie.poster_url)}
           alt={movie.title}
           referrerPolicy="no-referrer"
           className="h-full w-full object-cover object-center group-hover:scale-105 transition-transform duration-500"
