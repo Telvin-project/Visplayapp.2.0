@@ -2,6 +2,10 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
     {
+      "source": "/uploads/:path*",
+      "destination": "https://visplayapp-2-0.onrender.com/uploads/:path*"
+    },
+    {
       "source": "/api/:path*",
       "destination": "https://visplayapp-2-0.onrender.com/api/:path*"
     }

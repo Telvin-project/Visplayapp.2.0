@@ -83,8 +83,13 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
 
   useEffect(() => {
     // Check Picture-in-Picture browser support
-    if (typeof document !== 'undefined' && 'pictureInPictureEnabled' in document && document.pictureInPictureEnabled) {
-      setIsPiPSupported(true);
+    if (typeof document !== 'undefined') {
+      const video = videoRef.current;
+      const supportsPiP = Boolean(
+        ('pictureInPictureEnabled' in document && document.pictureInPictureEnabled) ||
+        (video && 'requestPictureInPicture' in video)
+      );
+      setIsPiPSupported(supportsPiP);
     }
 
     const video = videoRef.current;
@@ -260,12 +265,33 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
     videoRef.current.muted = nextMuted;
   };
 
-  const toggleFullscreen = () => {
-    if (!playerContainerRef.current) return;
-    if (!document.fullscreenElement) {
-      playerContainerRef.current.requestFullscreen().then(() => setIsFullscreen(true)).catch(e => console.error(e));
-    } else {
-      document.exitFullscreen().then(() => setIsFullscreen(false)).catch(e => console.error(e));
+  const toggleFullscreen = async () => {
+    const container = playerContainerRef.current;
+    if (!container) return;
+    try {
+      if (!document.fullscreenElement) {
+        // Fullscreen should target the player, then request landscape on mobile.
+        if (container.requestFullscreen) {
+          await container.requestFullscreen();
+        } else {
+          const video = videoRef.current as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null;
+          video?.webkitEnterFullscreen?.();
+        }
+        setIsFullscreen(true);
+        try {
+          const orientation = screen.orientation as ScreenOrientation & { lock?: (orientation: string) => Promise<void> };
+          if (orientation?.lock) await orientation.lock('landscape');
+        } catch {
+          // Orientation locking is denied by some browsers/OS settings; fullscreen still works.
+        }
+      } else {
+        const orientation = screen.orientation as ScreenOrientation & { unlock?: () => void };
+        try { orientation?.unlock?.(); } catch { /* unsupported */ }
+        await document.exitFullscreen();
+        setIsFullscreen(false);
+      }
+    } catch (e) {
+      console.error('Fullscreen could not be changed:', e);
     }
   };
 
