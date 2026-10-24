@@ -85,9 +85,13 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
     // Check Picture-in-Picture browser support
     if (typeof document !== 'undefined') {
       const video = videoRef.current;
+      const webkitVideo = video as (HTMLVideoElement & {
+        webkitSupportsPresentationMode?: (mode: string) => boolean;
+      }) | null;
       const supportsPiP = Boolean(
-        ('pictureInPictureEnabled' in document && document.pictureInPictureEnabled) ||
-        (video && 'requestPictureInPicture' in video)
+        (('pictureInPictureEnabled' in document && document.pictureInPictureEnabled) ||
+          (video && 'requestPictureInPicture' in video)) ||
+        webkitVideo?.webkitSupportsPresentationMode?.('picture-in-picture')
       );
       setIsPiPSupported(supportsPiP);
     }
@@ -267,27 +271,41 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
 
   const toggleFullscreen = async () => {
     const container = playerContainerRef.current;
-    if (!container) return;
+    const video = videoRef.current as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null;
+    if (!container || !video) return;
+
     try {
-      if (!document.fullscreenElement) {
-        // Fullscreen should target the player, then request landscape on mobile.
+      const isFullscreenNow = Boolean(document.fullscreenElement || (video as any).webkitDisplayingFullscreen);
+      if (!isFullscreenNow) {
+        // Fullscreen the shared player component for every account type.
         if (container.requestFullscreen) {
           await container.requestFullscreen();
-        } else {
-          const video = videoRef.current as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null;
-          video?.webkitEnterFullscreen?.();
+        } else if (video.webkitEnterFullscreen) {
+          // iOS Safari uses its native video fullscreen UI.
+          video.webkitEnterFullscreen();
         }
+
         setIsFullscreen(true);
+        // Android browsers generally permit orientation lock only after fullscreen begins.
         try {
-          const orientation = screen.orientation as ScreenOrientation & { lock?: (orientation: string) => Promise<void> };
-          if (orientation?.lock) await orientation.lock('landscape');
+          const orientation = screen.orientation as ScreenOrientation & {
+            lock?: (orientation: string) => Promise<void>;
+          };
+          if (orientation?.lock) {
+            try {
+              await orientation.lock('landscape');
+            } catch {
+              await orientation.lock('landscape-primary');
+            }
+          }
         } catch {
-          // Orientation locking is denied by some browsers/OS settings; fullscreen still works.
+          // Some browsers and OS settings prohibit programmatic rotation.
+          // Fullscreen remains available and the user can rotate the device manually.
         }
       } else {
         const orientation = screen.orientation as ScreenOrientation & { unlock?: () => void };
         try { orientation?.unlock?.(); } catch { /* unsupported */ }
-        await document.exitFullscreen();
+        if (document.fullscreenElement) await document.exitFullscreen();
         setIsFullscreen(false);
       }
     } catch (e) {
@@ -295,8 +313,17 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
     }
   };
 
+  useEffect(() => {
+    const syncFullscreenState = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', syncFullscreenState);
+    return () => document.removeEventListener('fullscreenchange', syncFullscreenState);
+  }, []);
+
   const togglePiP = async () => {
-    const video = videoRef.current;
+    const video = videoRef.current as (HTMLVideoElement & {
+      webkitSetPresentationMode?: (mode: string) => void;
+      webkitPresentationMode?: string;
+    }) | null;
     if (!video) return;
 
     try {
@@ -306,28 +333,34 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
         return;
       }
 
-      if (!document.pictureInPictureEnabled) {
-        setPipNotice('Picture-in-Picture is restricted or not supported by this browser.');
-        setTimeout(() => setPipNotice(null), 3500);
+      if (video.webkitSetPresentationMode && video.webkitPresentationMode === 'picture-in-picture') {
+        video.webkitSetPresentationMode('inline');
+        setIsPiPActive(false);
         return;
       }
 
-      // Ensure metadata is loaded (video.readyState >= 1) before requesting PiP
       if (video.readyState < 1) {
-                setPipNotice('Video is still loading. Please start video playback before enabling Picture-in-Picture.');
+        setPipNotice('Video is still loading. Start playback, then try Picture-in-Picture again.');
         setTimeout(() => setPipNotice(null), 3500);
         return;
       }
 
-      await video.requestPictureInPicture();
-      setIsPiPActive(true);
+      if (document.pictureInPictureEnabled && 'requestPictureInPicture' in video) {
+        await video.requestPictureInPicture();
+        setIsPiPActive(true);
+      } else if (video.webkitSetPresentationMode) {
+        // Safari/iOS WebKit exposes PiP through presentation mode instead.
+        video.webkitSetPresentationMode('picture-in-picture');
+        setIsPiPActive(true);
+      } else {
+        setPipNotice('Picture-in-Picture is not supported by this browser or device.');
+        setTimeout(() => setPipNotice(null), 3500);
+      }
     } catch (err: any) {
       const msg = err?.name === 'NotAllowedError'
-        ? 'Picture-in-Picture requires an active video playback interaction.'
+        ? 'Start playback first, then tap Picture-in-Picture again.'
         : err?.name === 'SecurityError'
-        ? 'Picture-in-Picture is disabled by container policy in this view.'
-        : err?.name === 'InvalidStateError'
-        ? 'Video stream metadata is still initializing. Please click play first then try PiP.'
+        ? 'Picture-in-Picture is restricted by this browser view.'
         : (err?.message || 'Picture-in-Picture is currently unavailable.');
       setPipNotice(msg);
       setTimeout(() => setPipNotice(null), 3500);
