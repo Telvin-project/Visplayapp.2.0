@@ -66,8 +66,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const res = await fetch('/api/auth/me');
       if (res.ok) {
         const data = await res.json();
-        setUser(data.user || null);
-        setCreatorProfile(data.creator_profile || null);
+        // If OAuth has already established a client session, don't let a slower
+        // unauthenticated /auth/me response overwrite the synchronized account.
+        const supabaseClient = getSupabaseClient();
+        const { data: sessionData } = supabaseClient
+          ? await supabaseClient.auth.getSession()
+          : { data: { session: null } };
+        if (data.user) {
+          setUser(data.user);
+          setCreatorProfile(data.creator_profile || null);
+        } else if (!sessionData.session?.user) {
+          setUser(null);
+          setCreatorProfile(null);
+        }
       } else {
         setUser(null);
         setCreatorProfile(null);
