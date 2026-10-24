@@ -390,10 +390,27 @@ async function startServer() {
 
   app.get('/api/creators/my-channel', requireAuth, (req: AuthenticatedRequest, res: Response) => {
     const db = loadDatabase();
-    const profile = db.creator_profiles.find(cp => cp.user_id === req.user!.id);
+    const currentUser = db.users.find(u => u.id === req.user!.id);
+    // OAuth sync can recreate the internal user ID while the creator profile
+    // remains attached to the same email. Resolve that relationship here too.
+    const profile = db.creator_profiles.find(cp => cp.user_id === req.user!.id)
+      || db.creator_profiles.find(cp => {
+        const owner = db.users.find(u => u.id === cp.user_id);
+        return Boolean(currentUser?.email && owner?.email?.toLowerCase() === currentUser.email.toLowerCase());
+      });
     if (!profile) {
       res.json({ creator_profile: null, stats: null });
       return;
+    }
+
+    if (profile.user_id !== req.user!.id) {
+      profile.user_id = req.user!.id;
+      saveDatabase(db);
+    }
+
+    if (profile.status === 'approved' && currentUser && currentUser.role !== 'admin') {
+      currentUser.role = 'creator';
+      saveDatabase(db);
     }
 
     const movies = db.movies.filter(m => m.creator_id === profile.id);
