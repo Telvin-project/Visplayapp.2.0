@@ -831,7 +831,7 @@ async function startServer() {
       if (!isR2Configured()) throw new Error('Cloudflare R2 credentials are missing from the server environment.');
       const ext = path.extname(String(filename || '')).toLowerCase().replace(/[^.a-z0-9]/g, '') || (folder === 'videos' ? '.mp4' : '.jpg');
       const objectPath = `${folder}/${req.user!.id}/${Date.now()}-${uuidv4()}${ext}`;
-      const command = new PutObjectCommand({ Bucket: MEDIA_BUCKET, Key: objectPath, ContentType: String(contentType || (folder === 'videos' ? 'video/mp4' : 'image/jpeg')), CacheControl: 'public, max-age=31536000, immutable' });
+      const command = new PutObjectCommand({ Bucket: MEDIA_BUCKET, Key: objectPath, ContentType: String(contentType || (folder === 'videos' ? 'video/mp4' : 'image/jpeg')) });
       const uploadUrl = await getSignedUrl(getR2Client(), command, { expiresIn: 900 });
       res.json({ uploadUrl, path: objectPath, publicUrl: getR2PublicUrl(objectPath) });
     } catch (error) {
