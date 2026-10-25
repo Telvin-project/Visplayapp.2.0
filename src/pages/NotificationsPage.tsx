@@ -54,7 +54,7 @@ export const NotificationsPage: React.FC<NotificationsPageProps> = ({ onSelectMo
   };
 
   return (
-    <section className="w-full min-w-0 max-w-3xl mx-auto px-0 sm:px-2 pb-8 overflow-x-hidden">
+    <section className="box-border w-full min-w-0 max-w-3xl mx-auto px-1 sm:px-2 pb-8 overflow-x-hidden">
       <div className="flex items-center gap-3 mb-5 min-w-0">
         <button onClick={onBack} className="w-10 h-10 shrink-0 rounded-xl border border-slate-800 bg-slate-900 flex items-center justify-center text-slate-300" aria-label="Back">
           <ArrowLeft className="w-4 h-4" />
@@ -82,7 +82,7 @@ export const NotificationsPage: React.FC<NotificationsPageProps> = ({ onSelectMo
                 </div>
                 <div className="min-w-0 flex-1">
                   <h2 className="text-sm font-semibold text-white">{item.title}</h2>
-                  <p className="text-sm text-slate-300 mt-1 whitespace-pre-wrap">{item.message}</p>
+                  <p className="text-sm text-slate-300 mt-1 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{item.message}</p>
                   <p className="text-[11px] text-slate-500 mt-2">{item.created_at ? new Date(item.created_at).toLocaleString() : ''}</p>
                   {item.link && <button onClick={() => openNotification(item)} className="mt-3 inline-flex items-center gap-2 rounded-lg bg-cyan-500/15 px-3 py-2 text-xs font-semibold text-cyan-300 hover:bg-cyan-500/25">Watch movie <Film className="w-3.5 h-3.5" /></button>}
                 </div>
