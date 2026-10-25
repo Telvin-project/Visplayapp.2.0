@@ -127,6 +127,9 @@ export interface Comment {
   parent_id?: string | null;
   comment_text: string;
   likes_count: number;
+  dislikes_count?: number;
+  liked_by?: string[];
+  disliked_by?: string[];
   created_at: string;
   updated_at?: string;
 }
