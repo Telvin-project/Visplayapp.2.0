@@ -26,7 +26,6 @@ import {
   ViewingEvent,
   Livestream,
   Premiere,
-  Reward,
   AdCampaign,
   AuditLog,
   Notification,
@@ -2148,55 +2147,13 @@ async function startServer() {
     res.json({ premieres: db.premieres });
   });
 
-  app.get('/api/rewards', requireAuth, (req: AuthenticatedRequest, res: Response) => {
-    const db = loadDatabase();
-    const rewards = db.rewards.filter(r => r.user_id === req.user!.id);
-    const totalPoints = rewards.reduce((sum, r) => sum + r.points, 0);
-    const totalNairaEarned = rewards.reduce((sum, r) => sum + r.naira_equivalent, 0);
-
-    res.json({ rewards, total_points: totalPoints, total_naira_equivalent: totalNairaEarned });
+  // Wallet reward claims are intentionally disabled. Rewards previously credited
+  // unearned coins and could be repeatedly claimed to bypass movie payments.
+  app.all('/api/rewards', (_req: Request, res: Response) => {
+    res.status(410).json({ error: 'Wallet rewards are disabled.' });
   });
-
-  app.post('/api/rewards/claim', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
-    const { reward_type, points, reason } = req.body;
-    const pts = parseInt(points, 10) || 100;
-    const naira = Math.floor(pts / 5); // 100 pts = ₦20 coins
-
-    const db = loadDatabase();
-    const user = db.users.find(u => u.id === req.user!.id);
-    if (!user) {
-      res.status(404).json({ error: 'User not found.' });
-      return;
-    }
-
-    const newReward: Reward = {
-      id: `rew_${uuidv4().substring(0, 8)}`,
-      user_id: user.id,
-      reward_type: reward_type || 'watch_bonus',
-      points: pts,
-      naira_equivalent: naira,
-      reason: reason || 'Nollywood Watch Time Streak Bonus',
-      created_at: new Date().toISOString(),
-    };
-    db.rewards.push(newReward);
-
-    // Credit coins directly to wallet
-    user.wallet_balance += naira;
-
-    db.transactions.push({
-      id: `tx_${uuidv4().substring(0, 8)}`,
-      user_id: user.id,
-      amount_ngn: naira,
-      type: 'earning',
-      status: 'successful',
-      reference: `VIS_REW_${Date.now()}`,
-      payment_method: 'wallet',
-      description: `Claimed Reward Coins: ${newReward.reason}`,
-      created_at: new Date().toISOString(),
-    });
-
-    await saveDatabase(db);
-    res.json({ success: true, reward: newReward, wallet_balance: user.wallet_balance });
+  app.all('/api/rewards/*', (_req: Request, res: Response) => {
+    res.status(410).json({ error: 'Wallet rewards are disabled.' });
   });
 
   app.get('/api/notifications', requireAuth, (req: AuthenticatedRequest, res: Response) => {
