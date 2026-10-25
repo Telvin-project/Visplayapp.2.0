@@ -567,7 +567,10 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
   };
 
   const handleShareMovie = async () => {
-    const shareData = { title: movie.title, text: `Watch ${movie.title} on VisPlay`, url: window.location.href };
+    // A stable, dedicated deep link that opens this exact movie, not the current app page.
+    const movieUrl = new URL(window.location.origin + '/');
+    movieUrl.searchParams.set('watch', movie.id);
+    const shareData = { title: movie.title, text: `Watch ${movie.title} on VisPlay`, url: movieUrl.toString() };
     try {
       if (navigator.share) await navigator.share(shareData);
       else if (navigator.clipboard?.writeText) {

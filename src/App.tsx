@@ -26,6 +26,20 @@ const AppContent: React.FC = () => {
   const skipHistoryPush = useRef(false);
   const [uploadStatus, setUploadStatus] = useState<{progress:number; active:boolean; error:boolean} | null>(null);
 
+  // Open a shared movie directly when the app loads with ?watch=<movieId>.
+  useEffect(() => {
+    const sharedMovieId = new URLSearchParams(window.location.search).get('watch');
+    if (sharedMovieId) {
+      setSelectedMovieId(sharedMovieId);
+      setCurrentView('watch');
+    }
+  }, []);
+
+  // Search is only for discovery on Home. Leaving Home clears it for the next visit.
+  useEffect(() => {
+    if (currentView !== 'home' && searchQuery) setSearchQuery('');
+  }, [currentView, searchQuery]);
+
   useEffect(() => {
     const handleUploadProgress = (event: Event) => {
       const detail = (event as CustomEvent).detail;
