@@ -40,12 +40,6 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showSearchInput, setShowSearchInput] = useState(false);
 
-  useEffect(() => {
-    if (currentView !== 'home') {
-      if (searchQuery) onSearchChange?.('');
-      setShowSearchInput(false);
-    }
-  }, [currentView]);
   const [notifications, setNotifications] = useState<any[]>([]);
 
   useEffect(() => {
@@ -71,7 +65,7 @@ export const Navbar: React.FC<NavbarProps> = ({
       if (searchQuery) onSearchChange?.('');
       setShowSearchInput(false);
     }
-  }, [currentView, searchQuery, onSearchChange]);
+  }, [currentView]);
 
   const unreadCount = notifications.filter(n => !n.is_read).length;
   const openNotifications = () => {
