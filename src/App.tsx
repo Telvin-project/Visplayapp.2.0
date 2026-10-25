@@ -18,8 +18,8 @@ import { LivePremieresPage } from './pages/LivePremieresPage';
 
 const AppContent: React.FC = () => {
   const { user, openAuthModal, openCreatorApplyModal } = useAuth();
-  const [currentView, setCurrentView] = useState<string>('home');
-  const [selectedMovieId, setSelectedMovieId] = useState<string>('mov_lagos_syndicate');
+  const [currentView, setCurrentView] = useState<string>(() => new URLSearchParams(window.location.search).has('watch') ? 'watch' : 'home');
+  const [selectedMovieId, setSelectedMovieId] = useState<string>(() => new URLSearchParams(window.location.search).get('watch') || 'mov_lagos_syndicate');
   const [selectedCreatorId, setSelectedCreatorId] = useState<string>('creator_01');
   const [selectedBundleId, setSelectedBundleId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -47,14 +47,26 @@ const AppContent: React.FC = () => {
     return () => window.removeEventListener('visplay-movie-payment-complete', handleMoviePaymentComplete);
   }, []);
 
-  // Keep in-app navigation in browser history so Back returns to the previous VisPlay page.
+  // Clear any active search whenever the visitor changes pages.
+  const previousView = useRef<string>(currentView);
   useEffect(() => {
+    if (previousView.current !== currentView) setSearchQuery('');
+    previousView.current = currentView;
+  }, [currentView]);
+
+  // Keep the selected movie in the URL so every film has a shareable deep link.
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (currentView === 'watch') url.searchParams.set('watch', selectedMovieId);
+    else url.searchParams.delete('watch');
+    const target = `${url.pathname}${url.search}${url.hash}`;
     const currentState = { visplay: true, currentView, selectedMovieId, selectedCreatorId, selectedBundleId };
+    if (window.location.pathname + window.location.search + window.location.hash !== target) {
     if (skipHistoryPush.current) {
       skipHistoryPush.current = false;
-      window.history.replaceState(currentState, '', window.location.href);
+      window.history.replaceState(currentState, '', target);
     } else {
-      window.history.pushState(currentState, '', window.location.href);
+      window.history.pushState(currentState, '', target);
     }
   }, [currentView, selectedMovieId, selectedCreatorId, selectedBundleId]);
 
@@ -89,18 +101,21 @@ const AppContent: React.FC = () => {
   }, [selectedMovieId, selectedCreatorId, selectedBundleId]);
 
   const handleSelectMovie = (id: string) => {
+    setSearchQuery('');
     setSelectedMovieId(id);
     setCurrentView('watch');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleSelectCreator = (id: string) => {
+    setSearchQuery('');
     setSelectedCreatorId(id);
     setCurrentView('channel');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleSelectBundle = (bundleId: string) => {
+    setSearchQuery('');
     setSelectedBundleId(bundleId);
     setCurrentView('bundles');
     window.scrollTo({ top: 0, behavior: 'smooth' });
