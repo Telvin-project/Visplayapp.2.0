@@ -1084,16 +1084,19 @@ async function startServer() {
     extended.liked_by ||= [];
     extended.disliked_by ||= [];
     extended.dislikes_count ||= 0;
-    const ownList = reaction === 'like' ? extended.liked_by : extended.disliked_by;
-    const wasSelected = ownList.includes(req.user!.id);
+    const previousLikes = Number(comment.likes_count) || 0;
+    const previousDislikes = Number(extended.dislikes_count) || 0;
+    const hadLike = extended.liked_by.includes(req.user!.id);
+    const hadDislike = extended.disliked_by.includes(req.user!.id);
+    const wasSelected = reaction === 'like' ? hadLike : hadDislike;
     extended.liked_by = extended.liked_by.filter(id => id !== req.user!.id);
     extended.disliked_by = extended.disliked_by.filter(id => id !== req.user!.id);
     if (!wasSelected) {
       if (reaction === 'like') extended.liked_by.push(req.user!.id);
       else extended.disliked_by.push(req.user!.id);
     }
-    comment.likes_count = extended.liked_by.length;
-    extended.dislikes_count = extended.disliked_by.length;
+    comment.likes_count = Math.max(0, previousLikes + (reaction === 'like' ? (wasSelected ? -1 : 1) : (hadLike ? -1 : 0)));
+    extended.dislikes_count = Math.max(0, previousDislikes + (reaction === 'dislike' ? (wasSelected ? -1 : 1) : (hadDislike ? -1 : 0)));
     await saveDatabase(db);
     res.json({
       likes_count: comment.likes_count,
