@@ -1893,6 +1893,23 @@ async function startServer() {
       });
     }
 
+    // Notify every follower when a creator's film becomes public, including a direct movie link.
+    if (movie.status === 'published' && creator) {
+      const followerIds = [...new Set(db.follows.filter(f => f.creator_user_id === creator.id).map(f => f.user_id))];
+      for (const followerId of followerIds) {
+        if (followerId === creator.user_id) continue;
+        db.notifications.push({
+          id: `notif_${uuidv4().substring(0, 8)}`,
+          user_id: followerId,
+          title: `${creator.channel_name} posted a new movie`,
+          message: `Now available: "${movie.title}". Tap to watch the 5-minute preview.`,
+          link: `/?watch=${encodeURIComponent(movie.id)}`,
+          is_read: false,
+          created_at: new Date().toISOString(),
+        });
+      }
+    }
+
     await saveDatabase(db);
     res.json({ success: true, movie, message: `Movie status set to ${movie.status}.` });
   });
