@@ -1074,6 +1074,33 @@ async function startServer() {
     res.status(201).json({ comment: newComment });
   });
 
+  app.post('/api/movies/:id/comments/:commentId/reaction', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    const reaction = req.body?.reaction;
+    if (reaction !== 'like' && reaction !== 'dislike') return void res.status(400).json({ error: 'Choose like or dislike.' });
+    const db = loadDatabase();
+    const comment = db.comments.find(c => c.id === req.params.commentId && c.movie_id === req.params.id);
+    if (!comment) return void res.status(404).json({ error: 'Comment not found.' });
+    const extended = comment as Comment & { liked_by?: string[]; disliked_by?: string[]; dislikes_count?: number };
+    extended.liked_by ||= [];
+    extended.disliked_by ||= [];
+    extended.dislikes_count ||= 0;
+    const ownList = reaction === 'like' ? extended.liked_by : extended.disliked_by;
+    const otherList = reaction === 'like' ? extended.disliked_by : extended.liked_by;
+    const wasSelected = ownList.includes(req.user!.id);
+    extended.liked_by = extended.liked_by.filter(id => id !== req.user!.id);
+    extended.disliked_by = extended.disliked_by.filter(id => id !== req.user!.id);
+    if (!wasSelected) ownList.push(req.user!.id);
+    comment.likes_count = extended.liked_by.length;
+    extended.dislikes_count = extended.disliked_by.length;
+    await saveDatabase(db);
+    res.json({
+      likes_count: comment.likes_count,
+      dislikes_count: extended.dislikes_count,
+      liked_by: extended.liked_by,
+      disliked_by: extended.disliked_by,
+    });
+  });
+
   app.delete('/api/movies/:id/comments/:commentId', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     const db = loadDatabase();
     const commentIndex = db.comments.findIndex(c => c.id === req.params.commentId);
