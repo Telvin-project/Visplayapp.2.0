@@ -616,7 +616,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
           ref={videoRef}
           src={resolveMediaUrl(movie.video_url)}
           poster={resolveMediaUrl(movie.poster_url) || resolveMediaUrl(movie.backdrop_url)}
-          className="w-full h-full object-contain cursor-pointer"
+          className="w-full h-full object-contain cursor-default"
           playsInline
           width={1280}
           height={720}
