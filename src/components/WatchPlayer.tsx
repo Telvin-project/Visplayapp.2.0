@@ -425,13 +425,21 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       const data = await res.json();
       if (!res.ok) {
         if (res.status === 402) {
-          // Insufficient funds -> launch Deposit Modal with seamless auto-resume!
-          openDepositModal(() => {
-            // Once user deposits, automatically re-attempt unlock
-            handlePurchaseMovie();
+          setPurchaseError('Your wallet balance is insufficient. Opening secure payment for this movie…');
+          const checkoutRes = await fetch('/api/purchases/movie/initialize', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ movie_id: movie.id }),
           });
-          setPurchaseError(`Insufficient coins. Please deposit ₦${data.shortfall_ngn} to continue.`);
-          setPurchasing(false);
+          const checkout = await checkoutRes.json();
+          if (!checkoutRes.ok) throw new Error(checkout.error || 'Could not start movie payment.');
+          if (checkout.already_owned) {
+            setPaywallReached(false);
+            await onRefreshMovie();
+            return;
+          }
+          if (!checkout.authorization_url) throw new Error('Paystack did not return a checkout link.');
+          window.location.assign(checkout.authorization_url);
           return;
         }
         throw new Error(data.error || 'Failed to complete movie purchase');
