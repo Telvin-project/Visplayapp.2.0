@@ -4,7 +4,8 @@ import fs from 'fs';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import multer from 'multer';
-import { createClient } from '@supabase/supabase-js';
+import { S3Client, PutObjectCommand, DeleteObjectsCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import cookieParser from 'cookie-parser';
 import { v4 as uuidv4 } from 'uuid';
 import {
@@ -71,94 +72,45 @@ const upload = multer({
   limits: { fileSize: 250 * 1024 * 1024 }, // 250MB limit
 });
 
-// Movie media is uploaded directly to Supabase Storage so videos and posters
-// survive Render redeploys. The service-role key is server-only.
-const movieMediaUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 250 * 1024 * 1024 }, // 250MB per file
-});
-
-const MEDIA_BUCKET = 'visplay-media';
-let mediaBucketReady: Promise<void> | null = null;
-
-function getMediaStorageClient() {
-  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) throw new Error('Persistent media storage is not configured on the server.');
-  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+// Movie media is stored in Cloudflare R2 so uploads survive Render redeploys.
+const movieMediaUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 250 * 1024 * 1024 } });
+const MEDIA_BUCKET = process.env.R2_BUCKET_NAME || 'visplay-media';
+function isR2Configured() {
+  return Boolean(process.env.R2_ACCOUNT_ID && process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY && process.env.R2_PUBLIC_BASE_URL);
 }
-
-async function ensureMediaBucket() {
-  if (!mediaBucketReady) {
-    mediaBucketReady = (async () => {
-      const client = getMediaStorageClient();
-      const { data: buckets, error: listError } = await client.storage.listBuckets();
-      if (listError) {
-        throw new Error('Unable to check Supabase Storage buckets: ' + listError.message);
-      }
-      if ((buckets || []).some(bucket => bucket.name === MEDIA_BUCKET)) return;
-
-      // VisPlay supports feature films up to 250 MB per media object.
-      // Keep this bucket aligned with the server upload limits.
-      const { error: createError } = await client.storage.createBucket(MEDIA_BUCKET, {
-        public: true,
-        fileSizeLimit: 250 * 1024 * 1024,
-      });
-      if (createError) {
-        const { data: refreshedBuckets, error: refreshError } = await client.storage.listBuckets();
-        if (refreshError || !(refreshedBuckets || []).some(bucket => bucket.name === MEDIA_BUCKET)) {
-          throw new Error('Unable to prepare permanent media storage: ' + createError.message);
-        }
-      }
-    })().catch(error => {
-      mediaBucketReady = null;
-      throw error;
-    });
-  }
-  await mediaBucketReady;
+function getR2Client() {
+  const accountId = process.env.R2_ACCOUNT_ID;
+  const accessKeyId = process.env.R2_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
+  if (!accountId || !accessKeyId || !secretAccessKey) throw new Error('Cloudflare R2 credentials are missing from the server environment.');
+  return new S3Client({ region: 'auto', endpoint: `https://${accountId}.r2.cloudflarestorage.com`, credentials: { accessKeyId, secretAccessKey } });
 }
-
+function getR2PublicUrl(objectPath: string) {
+  const baseUrl = process.env.R2_PUBLIC_BASE_URL?.replace(/\/+$/, '');
+  if (!baseUrl) throw new Error('R2_PUBLIC_BASE_URL is missing from the server environment.');
+  return `${baseUrl}/${objectPath.split('/').map(encodeURIComponent).join('/')}`;
+}
 async function storeMovieMedia(file: Express.Multer.File, folder: 'videos' | 'posters') {
-  await ensureMediaBucket();
-  const client = getMediaStorageClient();
-  const extension = path.extname(file.originalname) || (folder === 'videos' ? '.mp4' : '.jpg');
-  const objectPath = `${folder}/${Date.now()}-${uuidv4()} `.trim() + extension;
-  const { error } = await client.storage.from(MEDIA_BUCKET).upload(objectPath, file.buffer, {
-    contentType: file.mimetype || (folder === 'videos' ? 'video/mp4' : 'image/jpeg'),
-    upsert: false,
-    cacheControl: '31536000',
-  });
-  if (error) throw new Error('Media upload failed: ' + error.message);
-  return client.storage.from(MEDIA_BUCKET).getPublicUrl(objectPath).data.publicUrl;
+  const objectPath = `${folder}/${Date.now()}-${uuidv4()}${path.extname(file.originalname) || (folder === 'videos' ? '.mp4' : '.jpg')}`;
+  await getR2Client().send(new PutObjectCommand({ Bucket: MEDIA_BUCKET, Key: objectPath, Body: file.buffer, ContentType: file.mimetype || (folder === 'videos' ? 'video/mp4' : 'image/jpeg'), CacheControl: 'public, max-age=31536000, immutable' }));
+  return getR2PublicUrl(objectPath);
 }
 
 // Best-effort migration for legacy uploads: if an old file still exists on the
 // Render instance, copy it into durable storage the first time its movie is opened.
 async function migrateLegacyMediaUrl(url?: string | null): Promise<string | undefined> {
   if (!url || !url.startsWith('/uploads/')) return url || undefined;
-  const relativePath = url.slice('/uploads/'.length);
-  const safeParts = relativePath.split('/').filter(part => part && part !== '.' && part !== '..');
+  const safeParts = url.slice('/uploads/'.length).split('/').filter(part => part && part !== '.' && part !== '..');
   if (safeParts.length < 2) return url;
   const localPath = path.join(uploadsDir, ...safeParts);
-  if (!fs.existsSync(localPath)) return url;
+  if (!fs.existsSync(localPath) || !isR2Configured()) return url;
   try {
-    await ensureMediaBucket();
-    const client = getMediaStorageClient();
     const folder = safeParts[0] === 'videos' ? 'videos' : 'posters';
-    const fileBuffer = fs.readFileSync(localPath);
     const objectPath = `${folder}/migrated-${path.basename(localPath)}`;
-    const { error } = await client.storage.from(MEDIA_BUCKET).upload(objectPath, fileBuffer, {
-      contentType: folder === 'videos' ? 'video/mp4' : 'image/jpeg',
-      upsert: true,
-      cacheControl: '31536000',
-    });
-    if (error) {
-      console.error('Legacy media migration failed:', error.message);
-      return url;
-    }
-    return client.storage.from(MEDIA_BUCKET).getPublicUrl(objectPath).data.publicUrl;
+    await getR2Client().send(new PutObjectCommand({ Bucket: MEDIA_BUCKET, Key: objectPath, Body: fs.readFileSync(localPath), ContentType: folder === 'videos' ? 'video/mp4' : 'image/jpeg', CacheControl: 'public, max-age=31536000, immutable' }));
+    return getR2PublicUrl(objectPath);
   } catch (error) {
-    console.error('Legacy media migration failed:', error);
+    console.error('Legacy media migration to R2 failed:', error);
     return url;
   }
 }
@@ -867,35 +819,24 @@ async function startServer() {
     res.json({ bundle: { ...bundle, episodes, is_purchased: isPurchased }, creator });
   });
 
-  // Create a short-lived direct-to-Supabase upload URL so large videos do not
-  // have to pass through the Render server and its request timeout.
+  // Create a short-lived direct-to-R2 upload URL for large media files.
   app.post('/api/movies/upload-url', requireCreator, async (req: AuthenticatedRequest, res: Response) => {
     const { folder, filename, contentType, size } = req.body || {};
-    if (folder !== 'videos' && folder !== 'posters') {
-      res.status(400).json({ error: 'Invalid upload type.' });
-      return;
-    }
+    if (folder !== 'videos' && folder !== 'posters') return void res.status(400).json({ error: 'Invalid upload type.' });
     const maxSize = folder === 'videos' ? 250 * 1024 * 1024 : 15 * 1024 * 1024;
     if (!Number.isFinite(Number(size)) || Number(size) <= 0 || Number(size) > maxSize) {
-      res.status(400).json({ error: folder === 'videos' ? 'Video must be 250MB or smaller.' : 'Poster must be 15MB or smaller.' });
-      return;
+      return void res.status(400).json({ error: folder === 'videos' ? 'Video must be 250MB or smaller.' : 'Poster must be 15MB or smaller.' });
     }
     try {
-      await ensureMediaBucket();
-      const client = getMediaStorageClient();
-      const safeExtension = path.extname(String(filename || '')).toLowerCase().replace(/[^.a-z0-9]/g, '') || (folder === 'videos' ? '.mp4' : '.jpg');
-      const objectPath = `${folder}/${req.user!.id}/${Date.now()}-${uuidv4()}${safeExtension}`;
-      const { data, error } = await client.storage.from(MEDIA_BUCKET).createSignedUploadUrl(objectPath);
-      if (error || !data) throw error || new Error('Could not create a signed upload URL.');
-      res.json({
-        uploadUrl: data.signedUrl,
-        token: data.token,
-        path: data.path || objectPath,
-        publicUrl: client.storage.from(MEDIA_BUCKET).getPublicUrl(objectPath).data.publicUrl,
-      });
+      if (!isR2Configured()) throw new Error('Cloudflare R2 credentials are missing from the server environment.');
+      const ext = path.extname(String(filename || '')).toLowerCase().replace(/[^.a-z0-9]/g, '') || (folder === 'videos' ? '.mp4' : '.jpg');
+      const objectPath = `${folder}/${req.user!.id}/${Date.now()}-${uuidv4()}${ext}`;
+      const command = new PutObjectCommand({ Bucket: MEDIA_BUCKET, Key: objectPath, ContentType: String(contentType || (folder === 'videos' ? 'video/mp4' : 'image/jpeg')) });
+      const uploadUrl = await getSignedUrl(getR2Client(), command, { expiresIn: 900 });
+      res.json({ uploadUrl, path: objectPath, publicUrl: getR2PublicUrl(objectPath) });
     } catch (error) {
-      console.error('Could not prepare direct media upload:', error);
-      res.status(503).json({ error: 'Persistent storage setup failed: ' + (error instanceof Error ? error.message : 'Unknown storage error') });
+      console.error('Could not prepare direct R2 media upload:', error);
+      res.status(503).json({ error: 'R2 upload setup failed: ' + (error instanceof Error ? error.message : 'Unknown storage error') });
     }
   });
 
@@ -923,7 +864,7 @@ async function startServer() {
       const posterFile = files?.poster?.[0];
       const submittedVideoUrl = typeof req.body.video_url === 'string' ? req.body.video_url : '';
       const submittedPosterUrl = typeof req.body.poster_url === 'string' ? req.body.poster_url : '';
-      const publicMediaPrefix = `${(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').replace(/\/+$/, '')}/storage/v1/object/public/${MEDIA_BUCKET}/`;
+      const publicMediaPrefix = `${(process.env.R2_PUBLIC_BASE_URL || '').replace(/\/+$/, '')}/`;
       if (submittedVideoUrl && !submittedVideoUrl.startsWith(publicMediaPrefix)) {
         res.status(400).json({ error: 'Invalid video storage URL.' });
         return;
@@ -1746,21 +1687,18 @@ async function startServer() {
       return;
     }
 
-    // Remove uploaded files from persistent storage when they are Supabase Storage URLs.
-    // Older /uploads files may already be missing from Render's temporary filesystem.
+    // Remove this movie's R2 objects when possible; catalogue deletion still works if cleanup fails.
     try {
-      const client = getMediaStorageClient();
-      const objectPaths = [movie.video_url, movie.poster_url, movie.backdrop_url]
-        .filter((url): url is string => typeof url === 'string' && url.includes('/storage/v1/object/public/' + MEDIA_BUCKET + '/'))
-        .map(url => decodeURIComponent(url.split('/storage/v1/object/public/' + MEDIA_BUCKET + '/')[1].split('?')[0]))
+      const publicBase = process.env.R2_PUBLIC_BASE_URL?.replace(/\/+$/, '');
+      const objectKeys = [movie.video_url, movie.poster_url, movie.backdrop_url]
+        .filter((url): url is string => Boolean(publicBase && typeof url === 'string' && url.startsWith(publicBase + '/')))
+        .map(url => decodeURIComponent(url.slice(publicBase!.length + 1).split('?')[0]))
         .filter(Boolean);
-      const uniquePaths = [...new Set(objectPaths)];
-      if (uniquePaths.length) {
-        const { error } = await client.storage.from(MEDIA_BUCKET).remove(uniquePaths);
-        if (error) console.error('Could not remove one or more movie media objects:', error.message);
+      const uniqueKeys = [...new Set(objectKeys)];
+      if (uniqueKeys.length && isR2Configured()) {
+        await getR2Client().send(new DeleteObjectsCommand({ Bucket: MEDIA_BUCKET, Delete: { Objects: uniqueKeys.map(Key => ({ Key })) } }));
       }
     } catch (storageError) {
-      // Deletion from the catalogue must still be possible if storage cleanup is unavailable.
       console.error('Movie media cleanup failed:', storageError);
     }
 
