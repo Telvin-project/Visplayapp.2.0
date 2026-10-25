@@ -495,6 +495,30 @@ async function startServer() {
     });
   });
 
+  app.patch('/api/creators/my-channel/media', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    const db = loadDatabase();
+    const currentUser = db.users.find(u => u.id === req.user!.id);
+    const profile = db.creator_profiles.find(cp => cp.user_id === req.user!.id)
+      || db.creator_profiles.find(cp => {
+        const owner = db.users.find(u => u.id === cp.user_id);
+        return Boolean(currentUser?.email && owner?.email?.toLowerCase() === currentUser.email.toLowerCase());
+      });
+    if (!profile || profile.status !== 'approved') return void res.status(404).json({ error: 'Approved creator channel not found.' });
+    const { channel_avatar_url, channel_banner_url } = req.body || {};
+    const base = String(process.env.R2_PUBLIC_BASE_URL || '').replace(/\/$/, '');
+    const validImageUrl = (value: unknown) => typeof value === 'string' && base.length > 0 && value.startsWith(base + '/posters/') && value.length < 2048;
+    if (channel_avatar_url !== undefined) {
+      if (!validImageUrl(channel_avatar_url)) return void res.status(400).json({ error: 'Invalid profile image URL.' });
+      profile.channel_avatar_url = channel_avatar_url;
+    }
+    if (channel_banner_url !== undefined) {
+      if (!validImageUrl(channel_banner_url)) return void res.status(400).json({ error: 'Invalid cover image URL.' });
+      profile.channel_banner_url = channel_banner_url;
+    }
+    await saveDatabase(db);
+    res.json({ success: true, creator_profile: profile });
+  });
+
   // Public directory of approved creators
   app.get('/api/creators', (req: Request, res: Response) => {
     const db = loadDatabase();

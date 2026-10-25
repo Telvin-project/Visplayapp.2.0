@@ -40,7 +40,6 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showSearchInput, setShowSearchInput] = useState(false);
   const [notifications, setNotifications] = useState<any[]>([]);
-  const [notificationsOpen, setNotificationsOpen] = useState(false);
 
   useEffect(() => {
     if (!user) { setNotifications([]); return; }
@@ -60,14 +59,10 @@ export const Navbar: React.FC<NavbarProps> = ({
   }, [user?.id]);
 
   const unreadCount = notifications.filter(n => !n.is_read).length;
-  const openNotifications = async () => {
-    setNotificationsOpen(value => !value);
-    if (unreadCount > 0) {
-      try {
-        await fetch('/api/notifications/read-all', { method: 'POST' });
-        setNotifications(current => current.map(n => ({ ...n, is_read: true })));
-      } catch { /* Keep the panel usable if read state cannot be saved. */ }
-    }
+  const openNotifications = () => {
+    setCurrentView('notifications');
+    setMobileMenuOpen(false);
+    setUserDropdownOpen(false);
   };
 
   return (
@@ -188,10 +183,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <Bell className="w-4 h-4" />
                   {unreadCount > 0 && <span className="absolute -right-1 -top-1 min-w-4 h-4 px-1 rounded-full bg-rose-500 text-[9px] font-bold text-white flex items-center justify-center">{unreadCount > 9 ? '9+' : unreadCount}</span>}
                 </button>
-                {notificationsOpen && <div className="absolute right-0 mt-2 w-72 sm:w-80 max-h-96 overflow-y-auto rounded-2xl border border-slate-800 bg-[#0d121d] shadow-2xl z-50 p-3">
-                  <div className="font-bold text-white text-sm px-1 pb-2">Notifications</div>
-                  {notifications.length === 0 ? <p className="text-xs text-slate-400 p-3">You're all caught up.</p> : notifications.slice(0, 12).map((item) => <div key={item.id} className={`p-3 rounded-xl mb-1 ${item.is_read ? 'bg-slate-900/50' : 'bg-cyan-950/40 border border-cyan-900/60'}`}><div className="text-xs font-semibold text-white">{item.title}</div><p className="text-[11px] text-slate-300 mt-1">{item.message}</p><p className="text-[10px] text-slate-500 mt-1">{item.created_at ? new Date(item.created_at).toLocaleString() : ''}</p></div>)}
-                </div>}
+
               </div>
             )}
 
