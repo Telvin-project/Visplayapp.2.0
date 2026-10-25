@@ -143,7 +143,7 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
 
         await new Promise<void>((resolve, reject) => {
           const xhr = new XMLHttpRequest();
-          xhr.open('POST', signed.uploadUrl);
+          xhr.open('PUT', signed.uploadUrl);
           xhr.timeout = 30 * 60 * 1000;
           xhr.setRequestHeader('Content-Type', file.type || (folder === 'videos' ? 'video/mp4' : 'image/jpeg'));
           xhr.setRequestHeader('x-upsert', 'false');
