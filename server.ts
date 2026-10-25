@@ -125,7 +125,7 @@ async function storeMovieMedia(file: Express.Multer.File, folder: 'videos' | 'po
 // Render instance, copy it into durable storage the first time its movie is opened.
 async function migrateLegacyMediaUrl(url?: string | null): Promise<string | undefined> {
   if (!url || !url.startsWith('/uploads/')) return url || undefined;
-  const relativePath = url.replace(/^\\/uploads\\//, '');
+  const relativePath = url.replace(/^\/uploads\//, '');
   const safeParts = relativePath.split('/').filter(part => part && part !== '.' && part !== '..');
   if (safeParts.length < 2) return url;
   const localPath = path.join(uploadsDir, ...safeParts);
