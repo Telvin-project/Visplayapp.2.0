@@ -40,7 +40,6 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showSearchInput, setShowSearchInput] = useState(false);
   const [notifications, setNotifications] = useState<any[]>([]);
-  const [notificationsOpen, setNotificationsOpen] = useState(false);
 
   useEffect(() => {
     if (!user) { setNotifications([]); return; }
