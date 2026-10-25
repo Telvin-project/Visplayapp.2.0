@@ -605,7 +605,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       {/* ---------------- PLAYER CONTAINER ---------------- */}
       <div
         ref={playerContainerRef}
-        className={`visplay-player ${isFullscreen ? 'fixed inset-0 z-[100]' : 'sticky top-16 z-20'} aspect-video w-full bg-black overflow-hidden shadow-2xl border-y border-slate-800/80 group select-none`}
+        className={`visplay-player ${isFullscreen ? 'fixed inset-0 z-[100]' : 'sticky top-16 z-20 -mx-3 sm:mx-0 w-[calc(100%+1.5rem)] sm:w-full'} aspect-video bg-black overflow-hidden shadow-2xl border-y border-slate-800/80 group select-none`}
         onMouseMove={() => {
           setShowControls(true);
           if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
@@ -646,7 +646,11 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
             setIsPlaying(false);
             trackViewingEvent(duration, true, true);
           }}
-          onClick={handlePlayPause}
+          onClick={() => {
+            setShowControls(true);
+            if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+            controlsTimeoutRef.current = setTimeout(() => setShowControls(false), 3500);
+          }}
         />
 
         {videoLoadError && (
