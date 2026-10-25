@@ -63,7 +63,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const refreshUser = useCallback(async () => {
     try {
-      const res = await fetch('/api/auth/me');
+      const res = await fetch('/api/auth/me', { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
         // If OAuth has already established a client session, don't let a slower
@@ -80,8 +80,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setCreatorProfile(null);
         }
       } else {
-        setUser(null);
-        setCreatorProfile(null);
+        // A transient API/proxy response must not erase an already restored session.
+        // Only an explicit successful /auth/me response with no user clears it below.
+        console.warn('Auth session check returned a non-success response:', res.status);
       }
     } catch (err) {
       console.error('Failed to fetch auth/me', err);
@@ -95,6 +96,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       setAuthLoading(true);
       const res = await fetch('/api/auth/supabase-sync', {
+        credentials: 'include',
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -184,6 +186,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setAuthLoading(true);
     try {
       const res = await fetch('/api/auth/login', {
+        credentials: 'include',
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
@@ -207,6 +210,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setAuthLoading(true);
     try {
       const res = await fetch('/api/auth/register', {
+        credentials: 'include',
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password, full_name: fullName, phone }),
