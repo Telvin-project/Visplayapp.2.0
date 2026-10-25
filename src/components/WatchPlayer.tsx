@@ -616,7 +616,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
           ref={videoRef}
           src={resolveMediaUrl(movie.video_url)}
           poster={resolveMediaUrl(movie.poster_url) || resolveMediaUrl(movie.backdrop_url)}
-          className="w-full h-full object-contain cursor-pointer"
+          className="w-full h-full object-contain cursor-default"
           playsInline
           width={1280}
           height={720}
@@ -646,7 +646,11 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
             setIsPlaying(false);
             trackViewingEvent(duration, true, true);
           }}
-          onClick={() => {
+          onClick={(event) => {
+            // Prevent native video-surface clicks from toggling playback.
+            // Playback changes only through the explicit Play/Pause control.
+            event.preventDefault();
+            event.stopPropagation();
             setShowControls(true);
             if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
             controlsTimeoutRef.current = setTimeout(() => setShowControls(false), 3500);
