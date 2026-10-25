@@ -31,6 +31,7 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
   const [channelData, setChannelData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'overview' | 'upload' | 'movies' | 'earnings' | 'livestream'>('overview');
+  const [mediaSaving, setMediaSaving] = useState(false);
 
   // Upload Form State
   const [title, setTitle] = useState('');
@@ -95,6 +96,33 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleChannelImageChange = async (file: File | undefined, kind: 'avatar' | 'cover') => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) { alert('Please choose an image file.'); return; }
+    if (file.size > 15 * 1024 * 1024) { alert('Images must be 15 MB or smaller.'); return; }
+    setMediaSaving(true);
+    try {
+      const signed = await fetch('/api/movies/upload-url', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder: 'posters', filename: file.name, contentType: file.type, size: file.size }),
+      });
+      const signedData = await signed.json();
+      if (!signed.ok) throw new Error(signedData.error || 'Could not prepare image upload.');
+      const uploaded = await fetch(signedData.uploadUrl, { method: 'PUT', headers: { 'Content-Type': file.type }, body: file });
+      if (!uploaded.ok) throw new Error('Image upload failed. Please try again.');
+      const saved = await fetch('/api/creators/my-channel/media', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [kind === 'avatar' ? 'channel_avatar_url' : 'channel_banner_url']: signedData.publicUrl }),
+      });
+      const savedData = await saved.json();
+      if (!saved.ok) throw new Error(savedData.error || 'Could not save channel image.');
+      await fetchChannelData();
+      alert(kind === 'avatar' ? 'Channel profile picture updated.' : 'Channel cover photo updated.');
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Could not update channel image.');
+    } finally { setMediaSaving(false); }
   };
 
   const handleDeleteMovie = async (movie: Movie) => {
@@ -438,6 +466,21 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
           <span>Upload New Movie</span>
         </button>
       </div>
+
+      {/* Channel branding controls */}
+      <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="rounded-2xl border border-slate-800 bg-[#0d121d] p-4">
+          <p className="text-sm font-semibold text-white">Channel profile picture</p>
+          <p className="text-xs text-slate-400 mt-1 mb-3">Upload or change the image shown beside your channel name.</p>
+          <input aria-label="Upload channel profile picture" type="file" accept="image/*" disabled={mediaSaving} onChange={(e) => handleChannelImageChange(e.target.files?.[0], 'avatar')} className="block w-full text-xs text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-cyan-500/15 file:px-3 file:py-2 file:text-cyan-300" />
+        </div>
+        <div className="rounded-2xl border border-slate-800 bg-[#0d121d] p-4">
+          <p className="text-sm font-semibold text-white">Channel cover photo</p>
+          <p className="text-xs text-slate-400 mt-1 mb-3">Upload or change the banner image for your public channel.</p>
+          <input aria-label="Upload channel cover photo" type="file" accept="image/*" disabled={mediaSaving} onChange={(e) => handleChannelImageChange(e.target.files?.[0], 'cover')} className="block w-full text-xs text-slate-300 file:mr-3 file:rounded-lg file:border-0 file:bg-cyan-500/15 file:px-3 file:py-2 file:text-cyan-300" />
+        </div>
+      </div>
+      {mediaSaving && <p className="mt-2 text-xs text-cyan-300">Saving channel image…</p>}
 
       {/* Tabs */}
       <div className="flex items-center gap-2 overflow-x-auto no-scrollbar border-b border-slate-800 pb-2">
