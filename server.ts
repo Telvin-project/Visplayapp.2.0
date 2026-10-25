@@ -1623,6 +1623,74 @@ async function startServer() {
     res.json({ success: true, movie, message: `Movie status set to ${movie.status}.` });
   });
 
+  // Delete a movie: creators may remove only their own movies; super admins may remove any movie.
+  app.delete('/api/movies/:id', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    const db = loadDatabase();
+    const movieIndex = db.movies.findIndex(m => m.id === req.params.id);
+    if (movieIndex === -1) {
+      res.status(404).json({ error: 'Movie not found.' });
+      return;
+    }
+
+    const movie = db.movies[movieIndex];
+    const isAdmin = req.user!.role === 'admin';
+    const creator = db.creator_profiles.find(cp => cp.id === movie.creator_id);
+    const isOwner = Boolean(creator && creator.user_id === req.user!.id);
+
+    if (!isAdmin && !isOwner) {
+      res.status(403).json({ error: 'You can only delete movies uploaded to your own creator channel.' });
+      return;
+    }
+
+    // Remove uploaded files from persistent storage when they are Supabase Storage URLs.
+    // Older /uploads files may already be missing from Render's temporary filesystem.
+    try {
+      const client = getMediaStorageClient();
+      const objectPaths = [movie.video_url, movie.poster_url, movie.backdrop_url]
+        .filter((url): url is string => typeof url === 'string' && url.includes('/storage/v1/object/public/' + MEDIA_BUCKET + '/'))
+        .map(url => decodeURIComponent(url.split('/storage/v1/object/public/' + MEDIA_BUCKET + '/')[1].split('?')[0]))
+        .filter(Boolean);
+      const uniquePaths = [...new Set(objectPaths)];
+      if (uniquePaths.length) {
+        const { error } = await client.storage.from(MEDIA_BUCKET).remove(uniquePaths);
+        if (error) console.error('Could not remove one or more movie media objects:', error.message);
+      }
+    } catch (storageError) {
+      // Deletion from the catalogue must still be possible if storage cleanup is unavailable.
+      console.error('Movie media cleanup failed:', storageError);
+    }
+
+    db.movies.splice(movieIndex, 1);
+
+    if (isAdmin) {
+      db.audit_logs.push({
+        id: `aud_${uuidv4().substring(0, 8)}`,
+        admin_id: req.user!.id,
+        admin_name: req.user!.full_name,
+        action: 'DELETE_MOVIE',
+        target_type: 'movie',
+        target_id: movie.id,
+        details: `Removed movie "${movie.title}" from VisPlay for policy or moderation reasons.`,
+        created_at: new Date().toISOString(),
+      });
+      const owner = creator ? db.users.find(u => u.id === creator.user_id) : null;
+      if (owner) {
+        db.notifications.push({
+          id: `notif_${uuidv4().substring(0, 8)}`,
+          user_id: owner.id,
+          title: 'Movie Removed by VisPlay',
+          message: `Your movie "${movie.title}" was removed by the Super Admin for moderation reasons.`,
+          is_read: false,
+          created_at: new Date().toISOString(),
+        });
+      }
+    }
+
+    // Keep historical purchases, transactions, and creator ledger entries for accounting.
+    await saveDatabase(db);
+    res.json({ success: true, deleted_movie_id: movie.id, message: 'Movie removed successfully.' });
+  });
+
   // Admin Users List
   app.get('/api/admin/users', requireAdmin, (req: AuthenticatedRequest, res: Response) => {
     const db = loadDatabase();
