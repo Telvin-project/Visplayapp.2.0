@@ -69,11 +69,11 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 250 * 1024 * 1024 }, // 250MB limit
+  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB limit
 });
 
 // Movie media is stored in Cloudflare R2 so uploads survive Render redeploys.
-const movieMediaUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 250 * 1024 * 1024 } });
+const movieMediaUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
 const MEDIA_BUCKET = process.env.R2_BUCKET_NAME || 'visplay-media';
 function isR2Configured() {
   return Boolean(process.env.R2_ACCOUNT_ID && process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY && process.env.R2_PUBLIC_BASE_URL);
@@ -823,9 +823,9 @@ async function startServer() {
   app.post('/api/movies/upload-url', requireCreator, async (req: AuthenticatedRequest, res: Response) => {
     const { folder, filename, contentType, size } = req.body || {};
     if (folder !== 'videos' && folder !== 'posters') return void res.status(400).json({ error: 'Invalid upload type.' });
-    const maxSize = folder === 'videos' ? 250 * 1024 * 1024 : 15 * 1024 * 1024;
+    const maxSize = folder === 'videos' ? 500 * 1024 * 1024 : 15 * 1024 * 1024;
     if (!Number.isFinite(Number(size)) || Number(size) <= 0 || Number(size) > maxSize) {
-      return void res.status(400).json({ error: folder === 'videos' ? 'Video must be 250MB or smaller.' : 'Poster must be 15MB or smaller.' });
+      return void res.status(400).json({ error: folder === 'videos' ? 'Video must be 500MB or smaller.' : 'Poster must be 15MB or smaller.' });
     }
     try {
       if (!isR2Configured()) throw new Error('Cloudflare R2 credentials are missing from the server environment.');
@@ -844,9 +844,9 @@ async function startServer() {
   app.post('/api/movies/multipart/init', requireCreator, async (req: AuthenticatedRequest, res: Response) => {
     const { folder, filename, contentType, size } = req.body || {};
     if (folder !== 'videos' && folder !== 'posters') return void res.status(400).json({ error: 'Invalid upload type.' });
-    const maxSize = folder === 'videos' ? 250 * 1024 * 1024 : 15 * 1024 * 1024;
+    const maxSize = folder === 'videos' ? 500 * 1024 * 1024 : 15 * 1024 * 1024;
     if (!Number.isFinite(Number(size)) || Number(size) <= 0 || Number(size) > maxSize) {
-      return void res.status(400).json({ error: folder === 'videos' ? 'Video must be 250MB or smaller.' : 'Poster must be 15MB or smaller.' });
+      return void res.status(400).json({ error: folder === 'videos' ? 'Video must be 500MB or smaller.' : 'Poster must be 15MB or smaller.' });
     }
     try {
       if (!isR2Configured()) throw new Error('Cloudflare R2 credentials are missing from the server environment.');
