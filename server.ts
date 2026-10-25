@@ -86,7 +86,7 @@ function getR2Client() {
   return new S3Client({ region: 'auto', endpoint: `https://${accountId}.r2.cloudflarestorage.com`, credentials: { accessKeyId, secretAccessKey } });
 }
 function getR2PublicUrl(objectPath: string) {
-  const baseUrl = process.env.R2_PUBLIC_BASE_URL?.replace(/\\/+$/, '');
+  const baseUrl = process.env.R2_PUBLIC_BASE_URL?.replace(/\/+$/, '');
   if (!baseUrl) throw new Error('R2_PUBLIC_BASE_URL is missing from the server environment.');
   return `${baseUrl}/${objectPath.split('/').map(encodeURIComponent).join('/')}`;
 }
@@ -1689,7 +1689,7 @@ async function startServer() {
 
     // Remove this movie's R2 objects when possible; catalogue deletion still works if cleanup fails.
     try {
-      const publicBase = process.env.R2_PUBLIC_BASE_URL?.replace(/\\/+$/, '');
+      const publicBase = process.env.R2_PUBLIC_BASE_URL?.replace(/\/+$/, '');
       const objectKeys = [movie.video_url, movie.poster_url, movie.backdrop_url]
         .filter((url): url is string => Boolean(publicBase && typeof url === 'string' && url.startsWith(publicBase + '/')))
         .map(url => decodeURIComponent(url.slice(publicBase!.length + 1).split('?')[0]))
