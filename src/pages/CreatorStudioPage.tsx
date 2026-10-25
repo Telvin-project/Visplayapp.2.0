@@ -18,6 +18,7 @@ import {
   ArrowUpRight,
   Landmark,
   Radio,
+  Trash2,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -78,6 +79,23 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
       console.error(e);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDeleteMovie = async (movie: Movie) => {
+    if (!window.confirm(`Delete "${movie.title}" from your creator catalog? This cannot be undone.`)) return;
+    try {
+      const res = await fetch(`/api/movies/${encodeURIComponent(movie.id)}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || 'Could not delete this movie.');
+        return;
+      }
+      await fetchChannelData();
+      alert('Movie deleted successfully.');
+    } catch (error) {
+      console.error('Unable to delete movie:', error);
+      alert('Could not delete this movie right now. Please try again.');
     }
   };
 
@@ -542,14 +560,23 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
                     <span className="text-cyan-400">{movie.paid_unlocks_count} unlocks</span>
                   </div>
 
-                  {movie.status === 'published' && (
+                  <div className="flex flex-wrap items-center gap-3 pt-1">
+                    {movie.status === 'published' && (
+                      <button
+                        onClick={() => onSelectMovie(movie.id)}
+                        className="text-xs text-cyan-400 hover:underline"
+                      >
+                        Open Watch Page →
+                      </button>
+                    )}
                     <button
-                      onClick={() => onSelectMovie(movie.id)}
-                      className="text-xs text-cyan-400 hover:underline pt-1 inline-block"
+                      type="button"
+                      onClick={() => handleDeleteMovie(movie)}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-rose-900/70 bg-rose-950/40 px-2.5 py-1.5 text-xs font-semibold text-rose-300 hover:bg-rose-900/60"
                     >
-                      Open Watch Page →
+                      <Trash2 className="h-3.5 w-3.5" /> Delete movie
                     </button>
-                  )}
+                  </div>
                 </div>
               </div>
             ))}
