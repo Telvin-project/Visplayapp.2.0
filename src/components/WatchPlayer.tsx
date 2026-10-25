@@ -416,6 +416,40 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
     setPurchasing(true);
 
     try {
+      // If the wallet cannot cover the full price, go straight to movie-specific Paystack checkout.
+      // Do not ask the viewer to deposit into their wallet first.
+      const moviePrice = Number(movie.price_ngn) || 100;
+      if ((Number(user.wallet_balance) || 0) < moviePrice) {
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), 20000);
+        let checkoutRes: Response;
+        try {
+          checkoutRes = await fetch('/api/purchases/movie/initialize', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ movie_id: movie.id }),
+            signal: controller.signal,
+          });
+        } catch (error) {
+          if (error instanceof DOMException && error.name === 'AbortError') {
+            throw new Error('Payment setup took too long. Please try again. You have not been charged.');
+          }
+          throw new Error('VisPlay could not reach its payment server. Please try again. You have not been charged.');
+        } finally {
+          window.clearTimeout(timeout);
+        }
+        const checkout = await checkoutRes.json().catch(() => ({} as any));
+        if (!checkoutRes.ok) throw new Error(checkout.error || 'Could not start movie payment.');
+        if (checkout.already_owned) {
+          setPaywallReached(false);
+          await onRefreshMovie();
+          return;
+        }
+        if (!checkout.authorization_url) throw new Error('Paystack did not return a checkout link.');
+        window.location.assign(checkout.authorization_url);
+        return;
+      }
+
       const res = await fetch('/api/purchases/buy-movie', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -613,7 +647,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       {/* ---------------- PLAYER CONTAINER ---------------- */}
       <div
         ref={playerContainerRef}
-        className={`visplay-player ${isFullscreen ? 'fixed inset-0 z-[100]' : 'relative w-screen max-w-none left-0 translate-x-0 sm:!w-screen sm:!max-w-none'} aspect-video bg-black overflow-hidden shadow-2xl border-y border-slate-800/80 group select-none`}
+        className={`visplay-player ${isFullscreen ? 'fixed inset-0 z-[100]' : 'sticky top-16 z-30 w-screen max-w-none left-0 translate-x-0 sm:!w-screen sm:!max-w-none'} aspect-video bg-black overflow-hidden shadow-2xl border-y border-slate-800/80 group select-none`}
         onMouseMove={() => {
           setShowControls(true);
           if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);

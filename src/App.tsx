@@ -103,7 +103,14 @@ const AppContent: React.FC = () => {
     return () => window.removeEventListener('popstate', handlePopState);
   }, [selectedMovieId, selectedCreatorId, selectedBundleId]);
 
+  const handleNavbarViewChange = (view: string) => {
+    // Always clear discovery filters when changing sections or returning Home.
+    setSearchQuery('');
+    setCurrentView(view);
+  };
+
   const handleSelectMovie = (id: string) => {
+    setSearchQuery('');
     setSelectedMovieId(id);
     setCurrentView('watch');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -126,7 +133,7 @@ const AppContent: React.FC = () => {
       {/* Universal Top Bar Navigation */}
       <Navbar
         currentView={currentView}
-        setCurrentView={setCurrentView}
+        setCurrentView={handleNavbarViewChange}
         onSearchChange={setSearchQuery}
         searchQuery={searchQuery}
         onSelectMovieId={handleSelectMovie}

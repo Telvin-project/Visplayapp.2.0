@@ -54,7 +54,7 @@ export const NotificationsPage: React.FC<NotificationsPageProps> = ({ onSelectMo
   };
 
   return (
-    <section className="box-border w-full min-w-0 max-w-3xl mx-auto px-1 sm:px-2 pb-8 overflow-x-hidden">
+    <section className="box-border w-full min-w-0 max-w-4xl mx-auto px-0 sm:px-2 pb-24 overflow-x-hidden">
       <div className="flex items-center gap-3 mb-5 min-w-0">
         <button onClick={onBack} className="w-10 h-10 shrink-0 rounded-xl border border-slate-800 bg-slate-900 flex items-center justify-center text-slate-300" aria-label="Back">
           <ArrowLeft className="w-4 h-4" />
@@ -75,7 +75,7 @@ export const NotificationsPage: React.FC<NotificationsPageProps> = ({ onSelectMo
       ) : (
         <div className="space-y-3">
           {notifications.map(item => (
-            <article key={item.id} className={`rounded-2xl border p-4 sm:p-5 break-words overflow-hidden ${item.is_read ? 'border-slate-800 bg-[#0d121d]' : 'border-cyan-900/70 bg-cyan-950/25'}`}>
+            <article key={item.id} className={`w-full min-w-0 rounded-2xl border p-3 sm:p-5 break-words overflow-hidden ${item.is_read ? 'border-slate-800 bg-[#0d121d]' : 'border-cyan-900/70 bg-cyan-950/25'}`}>
               <div className="flex items-start gap-3">
                 <div className="w-9 h-9 shrink-0 rounded-xl bg-slate-900 flex items-center justify-center text-cyan-300">
                   <Film className="w-4 h-4" />
