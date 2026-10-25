@@ -92,12 +92,23 @@ async function ensureMediaBucket() {
   if (!mediaBucketReady) {
     mediaBucketReady = (async () => {
       const client = getMediaStorageClient();
-      const { error } = await client.storage.createBucket(MEDIA_BUCKET, {
+      const { data: buckets, error: listError } = await client.storage.listBuckets();
+      if (listError) {
+        throw new Error('Unable to check Supabase Storage buckets: ' + listError.message);
+      }
+      if ((buckets || []).some(bucket => bucket.name === MEDIA_BUCKET)) return;
+
+      // Supabase project-wide upload limits can be lower than the app's former
+      // 250 MB request. Create the bucket at the compatible 50 MB free-tier cap.
+      const { error: createError } = await client.storage.createBucket(MEDIA_BUCKET, {
         public: true,
-        fileSizeLimit: 250 * 1024 * 1024,
+        fileSizeLimit: 50 * 1024 * 1024,
       });
-      if (error && !/already exists/i.test(error.message)) {
-        throw new Error('Unable to prepare permanent media storage: ' + error.message);
+      if (createError) {
+        const { data: refreshedBuckets, error: refreshError } = await client.storage.listBuckets();
+        if (refreshError || !(refreshedBuckets || []).some(bucket => bucket.name === MEDIA_BUCKET)) {
+          throw new Error('Unable to prepare permanent media storage: ' + createError.message);
+        }
       }
     })().catch(error => {
       mediaBucketReady = null;
