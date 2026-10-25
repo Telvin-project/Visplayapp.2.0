@@ -121,6 +121,37 @@ async function storeMovieMedia(file: Express.Multer.File, folder: 'videos' | 'po
   return client.storage.from(MEDIA_BUCKET).getPublicUrl(objectPath).data.publicUrl;
 }
 
+// Best-effort migration for legacy uploads: if an old file still exists on the
+// Render instance, copy it into durable storage the first time its movie is opened.
+async function migrateLegacyMediaUrl(url?: string | null): Promise<string | undefined> {
+  if (!url || !url.startsWith('/uploads/')) return url || undefined;
+  const relativePath = url.replace(/^\\/uploads\\//, '');
+  const safeParts = relativePath.split('/').filter(part => part && part !== '.' && part !== '..');
+  if (safeParts.length < 2) return url;
+  const localPath = path.join(uploadsDir, ...safeParts);
+  if (!fs.existsSync(localPath)) return url;
+  try {
+    await ensureMediaBucket();
+    const client = getMediaStorageClient();
+    const folder = safeParts[0] === 'videos' ? 'videos' : 'posters';
+    const fileBuffer = fs.readFileSync(localPath);
+    const objectPath = `${folder}/migrated-${path.basename(localPath)}`;
+    const { error } = await client.storage.from(MEDIA_BUCKET).upload(objectPath, fileBuffer, {
+      contentType: folder === 'videos' ? 'video/mp4' : 'image/jpeg',
+      upsert: true,
+      cacheControl: '31536000',
+    });
+    if (error) {
+      console.error('Legacy media migration failed:', error.message);
+      return url;
+    }
+    return client.storage.from(MEDIA_BUCKET).getPublicUrl(objectPath).data.publicUrl;
+  } catch (error) {
+    console.error('Legacy media migration failed:', error);
+    return url;
+  }
+}
+
 export interface AuthenticatedRequest extends Request {
   user?: User;
 }
@@ -736,12 +767,28 @@ async function startServer() {
     });
   });
 
-  app.get('/api/movies/:id', (req: AuthenticatedRequest, res: Response) => {
+  app.get('/api/movies/:id', async (req: AuthenticatedRequest, res: Response) => {
     const db = loadDatabase();
     const movie = db.movies.find(m => m.id === req.params.id);
     if (!movie) {
       res.status(404).json({ error: 'Movie not found.' });
       return;
+    }
+
+    // Preserve legacy uploads where possible, and persist the migrated URLs.
+    const oldVideoUrl = movie.video_url;
+    const oldPosterUrl = movie.poster_url;
+    const [videoUrl, posterUrl] = await Promise.all([
+      migrateLegacyMediaUrl(movie.video_url),
+      migrateLegacyMediaUrl(movie.poster_url),
+    ]);
+    if (videoUrl && videoUrl !== oldVideoUrl) movie.video_url = videoUrl;
+    if (posterUrl && posterUrl !== oldPosterUrl) {
+      movie.poster_url = posterUrl;
+      if (movie.backdrop_url === oldPosterUrl || !movie.backdrop_url) movie.backdrop_url = posterUrl;
+    }
+    if (movie.video_url !== oldVideoUrl || movie.poster_url !== oldPosterUrl) {
+      await saveDatabase(db);
     }
 
     const creator = db.creator_profiles.find(cp => cp.id === movie.creator_id);
