@@ -20,6 +20,7 @@ import {
   ArrowRight,
   TrendingUp,
   Star,
+  Trash2,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -158,6 +159,26 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onSele
       }
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const handleDeleteMovie = async (movie: any) => {
+    const reason = window.prompt(`Remove "${movie.title}" from VisPlay? Enter the moderation reason (optional):`);
+    if (reason === null) return;
+    if (!window.confirm(`Confirm removal of "${movie.title}" from the platform?`)) return;
+    try {
+      const res = await fetch(`/api/movies/${encodeURIComponent(movie.id)}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error || 'Could not remove this movie.');
+        return;
+      }
+      setActionSuccess(`Removed "${movie.title}" from VisPlay.`);
+      setTimeout(() => setActionSuccess(null), 3500);
+      await fetchAdminData();
+    } catch (error) {
+      console.error('Unable to remove movie:', error);
+      alert('Could not remove this movie right now. Please try again.');
     }
   };
 
@@ -531,6 +552,14 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onSele
                         >
                           <Star className={`h-3 w-3 ${featuredMovieId === m.id ? 'fill-current' : ''}`} />
                           {featuredMovieId === m.id ? 'Featured now' : 'Feature on home'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteMovie(m)}
+                          className="inline-flex items-center gap-1 rounded-lg border border-rose-900/70 bg-rose-950/40 px-2 py-1 text-[10px] font-bold text-rose-300 hover:bg-rose-900/60"
+                          title="Remove this movie for a policy violation"
+                        >
+                          <Trash2 className="h-3 w-3" /> Remove movie
                         </button>
                       </div>
                     </td>
