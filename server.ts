@@ -1633,6 +1633,7 @@ async function startServer() {
     }
 
     const movie = db.movies[movieIndex];
+    const moderationReason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
     const isAdmin = req.user!.role === 'admin';
     const creator = db.creator_profiles.find(cp => cp.id === movie.creator_id);
     const isOwner = Boolean(creator && creator.user_id === req.user!.id);
@@ -1661,6 +1662,10 @@ async function startServer() {
     }
 
     db.movies.splice(movieIndex, 1);
+    if (db.featured_movie_id === movie.id) {
+      db.featured_movie_id = null;
+      db.featured_movie_backdrop = null;
+    }
 
     if (isAdmin) {
       db.audit_logs.push({
@@ -1670,7 +1675,7 @@ async function startServer() {
         action: 'DELETE_MOVIE',
         target_type: 'movie',
         target_id: movie.id,
-        details: `Removed movie "${movie.title}" from VisPlay for policy or moderation reasons.`,
+        details: `Removed movie "${movie.title}" from VisPlay for policy or moderation reasons.${moderationReason ? ` Reason: ${moderationReason}` : ''}`,
         created_at: new Date().toISOString(),
       });
       const owner = creator ? db.users.find(u => u.id === creator.user_id) : null;
@@ -1679,7 +1684,7 @@ async function startServer() {
           id: `notif_${uuidv4().substring(0, 8)}`,
           user_id: owner.id,
           title: 'Movie Removed by VisPlay',
-          message: `Your movie "${movie.title}" was removed by the Super Admin for moderation reasons.`,
+          message: `Your movie "${movie.title}" was removed by the Super Admin for moderation reasons.${moderationReason ? ` Reason: ${moderationReason}` : ''}`,
           is_read: false,
           created_at: new Date().toISOString(),
         });
