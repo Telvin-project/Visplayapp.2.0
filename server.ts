@@ -884,7 +884,7 @@ async function startServer() {
       });
     } catch (error) {
       console.error('Could not prepare direct media upload:', error);
-      res.status(503).json({ error: 'Persistent storage is not ready for uploads. Please try again shortly.' });
+      res.status(503).json({ error: 'Persistent storage setup failed: ' + (error instanceof Error ? error.message : 'Unknown storage error') });
     }
   });
 
