@@ -116,62 +116,88 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
     setUploadProgress(15);
 
     try {
+      let videoUrl = '';
+      let posterUrl = '';
+
+      const uploadDirectlyToStorage = async (
+        file: File,
+        folder: 'videos' | 'posters',
+        progressStart: number,
+        progressEnd: number,
+      ): Promise<string> => {
+        const urlResponse = await fetch('/api/movies/upload-url', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            folder,
+            filename: file.name,
+            contentType: file.type || (folder === 'videos' ? 'video/mp4' : 'image/jpeg'),
+            size: file.size,
+          }),
+        });
+        const signed = await urlResponse.json().catch(() => ({}));
+        if (!urlResponse.ok) {
+          throw new Error(signed.error || 'Could not prepare secure media upload.');
+        }
+
+        await new Promise<void>((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open('POST', signed.uploadUrl);
+          xhr.timeout = 30 * 60 * 1000;
+          xhr.setRequestHeader('Content-Type', file.type || (folder === 'videos' ? 'video/mp4' : 'image/jpeg'));
+          xhr.setRequestHeader('x-upsert', 'false');
+          xhr.upload.onprogress = (event) => {
+            if (event.lengthComputable && event.total > 0) {
+              const ratio = event.loaded / event.total;
+              setUploadProgress(Math.round(progressStart + ratio * (progressEnd - progressStart)));
+            }
+          };
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              resolve();
+              return;
+            }
+            let message = 'Storage rejected the upload. Please try again.';
+            try {
+              const response = JSON.parse(xhr.responseText || '{}');
+              message = response.message || response.error || message;
+            } catch { /* Keep the readable fallback message. */ }
+            reject(new Error(message));
+          };
+          xhr.onerror = () => reject(new Error('The upload connection was interrupted. Check your internet connection and try again.'));
+          xhr.ontimeout = () => reject(new Error('The upload took too long. Please retry on a stable connection or use a smaller/compressed video.'));
+          xhr.onabort = () => reject(new Error('Upload cancelled.'));
+          xhr.send(file);
+        });
+        return signed.publicUrl;
+      };
+
+      if (videoFile) {
+        videoUrl = await uploadDirectlyToStorage(videoFile, 'videos', 5, posterFile ? 82 : 92);
+      }
+      if (posterFile) {
+        posterUrl = await uploadDirectlyToStorage(posterFile, 'posters', videoFile ? 82 : 5, 92);
+      }
+
       const formData = new FormData();
       formData.append('title', title);
       formData.append('synopsis', synopsis);
       formData.append('genre', genre);
       formData.append('release_year', releaseYear);
       formData.append('rights_confirmed', 'true');
+      if (videoUrl) formData.append('video_url', videoUrl);
+      if (posterUrl) formData.append('poster_url', posterUrl);
 
-      if (videoFile) {
-        formData.append('video', videoFile);
-      }
-      if (posterFile) {
-        formData.append('poster', posterFile);
-      }
-
-      // Use XMLHttpRequest so the browser can report real upload progress.
-      // fetch() does not expose request-body upload progress, which left the UI
-      // frozen at the manually assigned 45% while the video was being sent.
-      const data = await new Promise<any>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', '/api/movies/upload');
-        xhr.timeout = 10 * 60 * 1000; // Large videos may take several minutes.
-        xhr.upload.onprogress = (event) => {
-          if (event.lengthComputable && event.total > 0) {
-            const percent = Math.round((event.loaded / event.total) * 90);
-            setUploadProgress(Math.max(10, Math.min(90, percent)));
-          } else {
-            setUploadProgress((current) => Math.min(85, current + 1));
-          }
-        };
-        xhr.onload = () => {
-          let responseData: any = {};
-          try {
-            responseData = xhr.responseText ? JSON.parse(xhr.responseText) : {};
-          } catch {
-            reject(new Error(
-              xhr.status >= 500
-                ? 'The upload server returned an error. Please try a smaller video or try again later.'
-                : 'The server returned an unreadable response. Please try again.'
-            ));
-            return;
-          }
-          if (xhr.status < 200 || xhr.status >= 300) {
-            reject(new Error(responseData.error || `Upload failed (HTTP ${xhr.status}).`));
-            return;
-          }
-          resolve(responseData);
-        };
-        xhr.onerror = () => reject(new Error(
-          'The upload connection was interrupted. Check your internet connection and try again.'
-        ));
-        xhr.ontimeout = () => reject(new Error(
-          'The upload took too long and timed out. Try a smaller/compressed video or a stronger connection.'
-        ));
-        xhr.onabort = () => reject(new Error('Upload cancelled.'));
-        xhr.send(formData);
+      const response = await fetch('/api/movies/upload', {
+        method: 'POST',
+        credentials: 'include',
+        body: formData,
       });
+      const responseData = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(responseData.error || `Movie submission failed (HTTP ${response.status}).`);
+      }
 
       setUploadProgress(100);
       confetti({ particleCount: 50, spread: 60 });
