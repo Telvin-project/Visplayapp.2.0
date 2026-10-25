@@ -1085,7 +1085,6 @@ async function startServer() {
     extended.disliked_by ||= [];
     extended.dislikes_count ||= 0;
     const ownList = reaction === 'like' ? extended.liked_by : extended.disliked_by;
-    const otherList = reaction === 'like' ? extended.disliked_by : extended.liked_by;
     const wasSelected = ownList.includes(req.user!.id);
     extended.liked_by = extended.liked_by.filter(id => id !== req.user!.id);
     extended.disliked_by = extended.disliked_by.filter(id => id !== req.user!.id);
