@@ -1,11 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { Movie, EpisodeBundle, WalletTransaction, CreatorProfile, Reward, Notification } from '../types';
+import { Movie, EpisodeBundle, WalletTransaction, CreatorProfile, Notification } from '../types';
 import { MovieCard } from '../components/MovieCard';
 import {
   FolderLock,
   Coins,
-  Sparkles,
   Users,
   Settings,
   Bell,
@@ -15,8 +14,6 @@ import {
   AlertCircle,
   Plus,
   ArrowRight,
-  Flame,
-  Award,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -32,10 +29,8 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
   onSelectBundle,
 }) => {
   const { user, updateProfile, openDepositModal, refreshUser, openCreatorApplyModal, creatorProfile, openAuthModal } = useAuth();
-  const [activeTab, setActiveTab] = useState<'library' | 'wallet' | 'rewards' | 'creators' | 'notifications' | 'profile'>('library');
+  const [activeTab, setActiveTab] = useState<'library' | 'history' | 'wallet' | 'creators' | 'notifications' | 'profile'>('library');
   const [libraryData, setLibraryData] = useState<any>(null);
-  const [rewards, setRewards] = useState<Reward[]>([]);
-  const [rewardPoints, setRewardPoints] = useState(0);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -58,20 +53,14 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
   const fetchUserDashboard = async () => {
     try {
       setLoading(true);
-      const [libRes, rewRes, notifRes] = await Promise.all([
+      const [libRes, notifRes] = await Promise.all([
         fetch('/api/user/library'),
-        fetch('/api/rewards'),
         fetch('/api/notifications'),
       ]);
 
       if (libRes.ok) {
         const data = await libRes.json();
         setLibraryData(data);
-      }
-      if (rewRes.ok) {
-        const data = await rewRes.json();
-        setRewards(data.rewards || []);
-        setRewardPoints(data.total_points || 0);
       }
       if (notifRes.ok) {
         const data = await notifRes.json();
@@ -97,23 +86,6 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
       setProfileMessage(res.error || 'Failed to update profile.');
     }
     setProfileSaving(false);
-  };
-
-  const handleClaimReward = async () => {
-    try {
-      const res = await fetch('/api/rewards/claim', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ points: 250, reason: 'Nollywood 5-Day Viewing Streak Bonus' }),
-      });
-      if (res.ok) {
-        confetti({ particleCount: 60, spread: 70 });
-        await refreshUser();
-        await fetchUserDashboard();
-      }
-    } catch (e) {
-      console.error(e);
-    }
   };
 
   const unlockedMovies: Movie[] = libraryData?.movies || [];
@@ -191,7 +163,6 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
           { id: 'library', label: `Unlocked Movies (${unlockedMovies.length})` },
           { id: 'history', label: `Watch History (${watchHistory.length})` },
           { id: 'wallet', label: 'Wallet & Paystack History' },
-          { id: 'rewards', label: `Rewards & Streaks (${rewardPoints} Pts)` },
           { id: 'creators', label: `Followed Creators (${followedCreators.length})` },
           { id: 'notifications', label: `Notifications (${notifications.filter(n => !n.is_read).length})` },
           { id: 'profile', label: 'Account Profile' },
@@ -313,50 +284,6 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
                 ))}
               </tbody>
             </table>
-          </div>
-        </div>
-      )}
-
-      {/* ---------------- TAB 3: REWARDS & STREAKS ---------------- */}
-      {activeTab === 'rewards' && (
-        <div className="space-y-6">
-          <div className="p-6 bg-gradient-to-r from-cyan-950/30 to-fuchsia-950/30 border border-slate-800 rounded-3xl flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div className="space-y-1">
-              <span className="text-xs text-cyan-400 font-semibold flex items-center gap-1.5">
-                <Flame className="w-4 h-4 text-orange-400" />
-                <span>Audience Loyalty Rewards</span>
-              </span>
-              <h3 className="text-xl font-bold text-white">Daily Watch Time Streak</h3>
-              <p className="text-xs text-slate-400">
-                Earn streak points for watching previews and supporting Nollywood filmmakers. Convert points to wallet coins!
-              </p>
-            </div>
-
-            <button
-              onClick={handleClaimReward}
-              className="py-3 px-5 rounded-xl font-bold text-xs bg-gradient-to-r from-fuchsia-600 to-cyan-500 text-white flex items-center gap-1.5 shrink-0"
-            >
-              <Award className="w-4 h-4" />
-              <span>Claim +₦50 Streak Bonus</span>
-            </button>
-          </div>
-
-          <div className="space-y-3">
-            {rewards.map((r) => (
-              <div
-                key={r.id}
-                className="p-4 bg-[#0d121d] border border-slate-800 rounded-2xl flex items-center justify-between"
-              >
-                <div>
-                  <h4 className="text-xs font-bold text-white">{r.reason}</h4>
-                  <span className="text-[10px] text-slate-500">{new Date(r.created_at).toLocaleDateString()}</span>
-                </div>
-                <div className="text-right">
-                  <span className="text-xs font-bold text-cyan-300 font-mono">+{r.points} Pts</span>
-                  <span className="block text-[10px] text-emerald-400 font-mono">₦{r.naira_equivalent} credited</span>
-                </div>
-              </div>
-            ))}
           </div>
         </div>
       )}
