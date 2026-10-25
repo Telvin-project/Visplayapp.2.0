@@ -222,6 +222,7 @@ async function startServer() {
       httpOnly: true,
       secure: isProd,
       sameSite: 'lax',
+      path: '/',
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
@@ -352,7 +353,7 @@ async function startServer() {
   });
 
   app.post('/api/auth/logout', (req: Request, res: Response) => {
-    res.clearCookie('visplay_token');
+    res.clearCookie('visplay_token', { path: '/', secure: isProd, sameSite: 'lax' });
     res.json({ success: true, message: 'Logged out successfully.' });
   });
 
