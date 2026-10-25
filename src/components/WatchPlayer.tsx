@@ -570,7 +570,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       {/* ---------------- PLAYER CONTAINER ---------------- */}
       <div
         ref={playerContainerRef}
-        className={`visplay-player sticky top-16 z-20 relative aspect-video w-full bg-black overflow-hidden shadow-2xl border-y border-slate-800/80 group select-none ${isFullscreen ? 'fixed inset-0 top-0 z-[100]' : ''}`}
+        className={`visplay-player ${isFullscreen ? 'fixed inset-0 z-[100]' : 'sticky top-16 z-20'} aspect-video w-full bg-black overflow-hidden shadow-2xl border-y border-slate-800/80 group select-none`}
         onMouseMove={() => {
           setShowControls(true);
           if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
