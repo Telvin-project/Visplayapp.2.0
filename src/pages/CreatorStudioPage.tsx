@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Movie, CreatorPayout, CreatorLedger } from '../types';
 import {
@@ -42,8 +42,23 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
   const [rightsConfirmed, setRightsConfirmed] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const lastNotificationProgress = useRef(-1);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
+
+  const updateUploadProgress = (progress: number) => {
+    setUploadProgress(progress);
+    const active = progress > 0 && progress < 100;
+    window.dispatchEvent(new CustomEvent('visplay-upload-progress', { detail: { progress, active, error: false } }));
+    const shouldNotify = progress === 100 || progress === 0 || progress - lastNotificationProgress.current >= 5;
+    if (shouldNotify && 'serviceWorker' in navigator && 'Notification' in window && Notification.permission === 'granted') {
+      lastNotificationProgress.current = progress;
+      navigator.serviceWorker.ready.then(registration => registration.showNotification(
+        progress === 100 ? 'VisPlay upload complete' : progress === 0 ? 'VisPlay upload interrupted' : 'Uploading to VisPlay',
+        { body: progress === 100 ? 'Your movie has been uploaded.' : progress === 0 ? 'Open VisPlay to check the upload and retry if needed.' : `Movie upload progress: ${progress}%`, tag: 'visplay-upload-progress', icon: '/visplay-symbol.png', badge: '/visplay-symbol.png', silent: true, data: { url: '/' } }
+      )).catch(() => undefined);
+    }
+  };
 
   // Livestream Schedule State
   const [liveTitle, setLiveTitle] = useState('');
@@ -112,8 +127,11 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
 
     setUploadError(null);
     setUploadSuccess(null);
+    if ('Notification' in window && Notification.permission === 'default') {
+      try { await Notification.requestPermission(); } catch { /* Notifications are optional. */ }
+    }
     setUploading(true);
-    setUploadProgress(15);
+    updateUploadProgress(0);
 
     try {
       let videoUrl = '';
@@ -138,11 +156,12 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
           const init = await initResponse.json().catch(() => ({}));
           if (!initResponse.ok) throw new Error(init.error || 'Could not start resumable video upload.');
           const loadedByPart = new Array<number>(partCount).fill(0);
+          let maxReportedProgress = progressStart;
           const completedParts: Array<{ PartNumber: number; ETag: string }> = new Array(partCount);
           const reportProgress = () => {
             const loaded = loadedByPart.reduce((sum, value) => sum + value, 0);
             const ratio = Math.min(1, loaded / file.size);
-            setUploadProgress(Math.round(progressStart + ratio * (progressEnd - progressStart)));
+            updateUploadProgress(Math.round(progressStart + ratio * (progressEnd - progressStart)));
           };
           const uploadPart = async (index: number): Promise<void> => {
             const start = index * partSize;
@@ -246,7 +265,7 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
           xhr.upload.onprogress = (event) => {
             if (event.lengthComputable && event.total > 0) {
               const ratio = event.loaded / event.total;
-              setUploadProgress(Math.round(progressStart + ratio * (progressEnd - progressStart)));
+              updateUploadProgress(Math.round(progressStart + ratio * (progressEnd - progressStart)));
             }
           };
           xhr.onload = () => {
@@ -295,7 +314,7 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
         throw new Error(responseData.error || `Movie submission failed (HTTP ${response.status}).`);
       }
 
-      setUploadProgress(100);
+      updateUploadProgress(100);
       confetti({ particleCount: 50, spread: 60 });
       setUploadSuccess(`"${title}" submitted! It is now in the Super Admin moderation queue.`);
       
@@ -581,7 +600,7 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
                 className="w-full text-xs text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-cyan-500/20 file:text-cyan-300 hover:file:bg-cyan-500/30 cursor-pointer"
               />
               <p className="text-[10px] text-slate-500">
-                Supports real video uploads up to 500 MB. Large videos upload in resumable chunks. (Demo fallback stream provided if omitted).
+                Videos up to 500 MB are supported. Large videos upload in resumable chunks.
               </p>
             </div>
 

@@ -25,6 +25,9 @@ import {
   Sparkles,
   ArrowRight,
   Tv,
+  ThumbsUp,
+  ThumbsDown,
+  MessageCircle,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -83,6 +86,8 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
   const [comments, setComments] = useState<Comment[]>([]);
   const [newComment, setNewComment] = useState('');
   const [submittingComment, setSubmittingComment] = useState(false);
+  const [replyToId, setReplyToId] = useState<string | null>(null);
+  const [replyText, setReplyText] = useState('');
 
   // Unique session ID for analytics tracking
   const [sessionId] = useState(() => `sess_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`);
@@ -495,6 +500,53 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
     }
   };
 
+  const handleCommentReaction = async (commentId: string, reaction: 'like' | 'dislike') => {
+    if (!user) { openAuthModal('login'); return; }
+    try {
+      const response = await fetch(`/api/movies/${movie.id}/comments/${commentId}/reaction`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reaction }),
+      });
+      if (!response.ok) throw new Error('Could not save comment reaction.');
+      const data = await response.json();
+      setComments(current => current.map(comment => comment.id === commentId ? {
+        ...comment, likes_count: data.likes_count, dislikes_count: data.dislikes_count,
+        liked_by: data.liked_by, disliked_by: data.disliked_by,
+      } : comment));
+    } catch (error) { console.error(error); }
+  };
+
+  const handleSubmitReply = async (e: React.FormEvent, parentId: string) => {
+    e.preventDefault();
+    if (!user) { openAuthModal('login'); return; }
+    if (!replyText.trim()) return;
+    try {
+      const response = await fetch(`/api/movies/${movie.id}/comments`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comment_text: replyText.trim(), parent_id: parentId }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setComments(current => [...current, data.comment]);
+        setReplyText('');
+        setReplyToId(null);
+      }
+    } catch (error) { console.error(error); }
+  };
+
+  const handleShareMovie = async () => {
+    const shareData = { title: movie.title, text: `Watch ${movie.title} on VisPlay`, url: window.location.href };
+    try {
+      if (navigator.share) await navigator.share(shareData);
+      else if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(shareData.url);
+        alert('Sharing is not available in this browser. The movie link has been copied.');
+      } else window.prompt('Copy this movie link to share:', shareData.url);
+    } catch (error: any) {
+      if (error?.name !== 'AbortError') console.error('Movie sharing failed:', error);
+    }
+  };
+
   // Delete Comment
   const handleDeleteComment = async (commentId: string) => {
     try {
@@ -518,7 +570,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       {/* ---------------- PLAYER CONTAINER ---------------- */}
       <div
         ref={playerContainerRef}
-        className="visplay-player relative aspect-video w-full bg-black overflow-hidden shadow-2xl border-y border-slate-800/80 group select-none"
+        className={`visplay-player ${isFullscreen ? 'fixed inset-0 z-[100]' : 'sticky top-16 z-20'} aspect-video w-full bg-black overflow-hidden shadow-2xl border-y border-slate-800/80 group select-none`}
         onMouseMove={() => {
           setShowControls(true);
           if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
@@ -785,10 +837,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
             </button>
 
             <button
-              onClick={() => {
-                navigator.clipboard.writeText(window.location.href);
-                alert('Watch link copied to clipboard!');
-              }}
+              onClick={handleShareMovie}
               className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-white transition-colors"
               title="Share movie"
             >
@@ -891,7 +940,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
               Be the first to share your thoughts on this Nollywood release.
             </p>
           ) : (
-            comments.map((c) => (
+            comments.filter(c => !c.parent_id).map((c) => (
               <div key={c.id} className="flex gap-3 p-3 bg-slate-900/60 rounded-2xl border border-slate-800/60">
                 <img
                   src={c.user_avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80'}
@@ -917,6 +966,35 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
                     </div>
                   </div>
                   <p className="text-xs text-slate-300 mt-1 leading-relaxed">{c.comment_text}</p>
+                  <div className="mt-3 flex flex-wrap items-center gap-3 text-[11px]">
+                    <button type="button" onClick={() => handleCommentReaction(c.id, 'like')} className={`inline-flex items-center gap-1 ${user && c.liked_by?.includes(user.id) ? 'text-cyan-300' : 'text-slate-400'}`}>
+                      <ThumbsUp className="w-3.5 h-3.5" /> {c.likes_count || 0}
+                    </button>
+                    <button type="button" onClick={() => handleCommentReaction(c.id, 'dislike')} className={`inline-flex items-center gap-1 ${user && c.disliked_by?.includes(user.id) ? 'text-rose-300' : 'text-slate-400'}`}>
+                      <ThumbsDown className="w-3.5 h-3.5" /> {c.dislikes_count || 0}
+                    </button>
+                    <button type="button" onClick={() => setReplyToId(replyToId === c.id ? null : c.id)} className="inline-flex items-center gap-1 text-slate-400 hover:text-cyan-300">
+                      <MessageCircle className="w-3.5 h-3.5" /> Reply
+                    </button>
+                  </div>
+                  {replyToId === c.id && (
+                    <form onSubmit={(e) => handleSubmitReply(e, c.id)} className="mt-3 flex gap-2">
+                      <input value={replyText} onChange={e => setReplyText(e.target.value)} placeholder="Write a reply..." className="min-w-0 flex-1 rounded-lg bg-slate-950 border border-slate-700 px-3 py-2 text-xs" />
+                      <button type="submit" disabled={!replyText.trim()} className="rounded-lg bg-cyan-500 px-3 py-2 text-xs font-bold text-slate-950 disabled:opacity-50">Reply</button>
+                    </form>
+                  )}
+                  <div className="mt-3 ml-2 space-y-2 border-l border-slate-700 pl-3">
+                    {comments.filter(reply => reply.parent_id === c.id).map(reply => (
+                      <div key={reply.id} className="rounded-lg bg-slate-950/70 p-3">
+                        <span className="text-[11px] font-semibold text-white">{reply.user_name}</span>
+                        <p className="mt-1 text-xs text-slate-300">{reply.comment_text}</p>
+                        <div className="mt-2 flex gap-3 text-[11px]">
+                          <button type="button" onClick={() => handleCommentReaction(reply.id, 'like')} className="inline-flex items-center gap-1 text-slate-400"><ThumbsUp className="w-3 h-3" /> {reply.likes_count || 0}</button>
+                          <button type="button" onClick={() => handleCommentReaction(reply.id, 'dislike')} className="inline-flex items-center gap-1 text-slate-400"><ThumbsDown className="w-3 h-3" /> {reply.dislikes_count || 0}</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             ))
