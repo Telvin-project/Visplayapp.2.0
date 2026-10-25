@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Movie, CreatorPayout, CreatorLedger } from '../types';
 import {
@@ -42,12 +42,22 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
   const [rightsConfirmed, setRightsConfirmed] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const lastNotificationProgress = useRef(-1);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
 
   const updateUploadProgress = (progress: number) => {
     setUploadProgress(progress);
-    window.dispatchEvent(new CustomEvent('visplay-upload-progress', { detail: { progress, active: progress > 0 && progress < 100, error: false } }));
+    const active = progress > 0 && progress < 100;
+    window.dispatchEvent(new CustomEvent('visplay-upload-progress', { detail: { progress, active, error: false } }));
+    const shouldNotify = progress === 100 || progress === 0 || progress - lastNotificationProgress.current >= 5;
+    if (shouldNotify && 'serviceWorker' in navigator && 'Notification' in window && Notification.permission === 'granted') {
+      lastNotificationProgress.current = progress;
+      navigator.serviceWorker.ready.then(registration => registration.showNotification(
+        progress === 100 ? 'VisPlay upload complete' : progress === 0 ? 'VisPlay upload interrupted' : 'Uploading to VisPlay',
+        { body: progress === 100 ? 'Your movie has been uploaded.' : progress === 0 ? 'Open VisPlay to check the upload and retry if needed.' : `Movie upload progress: ${progress}%`, tag: 'visplay-upload-progress', icon: '/visplay-symbol.png', badge: '/visplay-symbol.png', silent: true, data: { url: '/' } }
+      )).catch(() => undefined);
+    }
   };
 
   // Livestream Schedule State
@@ -117,6 +127,9 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
 
     setUploadError(null);
     setUploadSuccess(null);
+    if ('Notification' in window && Notification.permission === 'default') {
+      try { await Notification.requestPermission(); } catch { /* Notifications are optional. */ }
+    }
     setUploading(true);
     updateUploadProgress(0);
 
