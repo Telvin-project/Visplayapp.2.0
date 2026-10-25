@@ -102,6 +102,11 @@ export const HomePage: React.FC<HomePageProps> = ({
     }
   };
 
+  const normalizedSearch = searchQuery.trim().toLocaleLowerCase();
+  const matchingCreators = normalizedSearch
+    ? creators.filter(c => c.channel_name?.toLocaleLowerCase().includes(normalizedSearch))
+    : creators;
+
   const genres = ['All', 'Drama', 'Comedy', 'Action', 'Romance', 'Thriller', 'Horror', 'Documentary', 'Series'];
 
   // The Super Admin's selected title leads the slideshow; the remaining published films follow.
@@ -346,7 +351,7 @@ export const HomePage: React.FC<HomePageProps> = ({
       </section>
 
       {/* ---------------- FEATURED CREATORS & STUDIOS ---------------- */}
-      {creators.length > 0 && !searchQuery && (
+      {matchingCreators.length > 0 && (
         <section className="space-y-4 pt-4 border-t border-slate-800/60">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -359,7 +364,7 @@ export const HomePage: React.FC<HomePageProps> = ({
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {creators.map((c) => (
+            {matchingCreators.map((c) => (
               <div
                 key={c.id}
                 onClick={() => onSelectCreator(c.id)}
