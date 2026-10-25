@@ -125,6 +125,103 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
         progressStart: number,
         progressEnd: number,
       ): Promise<string> => {
+        // Large videos use multipart uploads so a failed network request only needs
+        // to retry one 8 MB part instead of restarting the entire movie.
+        if (folder === 'videos' && file.size > 16 * 1024 * 1024) {
+          const partSize = 8 * 1024 * 1024;
+          const partCount = Math.ceil(file.size / partSize);
+          const initResponse = await fetch('/api/movies/multipart/init', {
+            method: 'POST', credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folder, filename: file.name, contentType: file.type || 'video/mp4', size: file.size }),
+          });
+          const init = await initResponse.json().catch(() => ({}));
+          if (!initResponse.ok) throw new Error(init.error || 'Could not start resumable video upload.');
+          const loadedByPart = new Array<number>(partCount).fill(0);
+          const completedParts: Array<{ PartNumber: number; ETag: string }> = new Array(partCount);
+          const reportProgress = () => {
+            const loaded = loadedByPart.reduce((sum, value) => sum + value, 0);
+            const ratio = Math.min(1, loaded / file.size);
+            setUploadProgress(Math.round(progressStart + ratio * (progressEnd - progressStart)));
+          };
+          const uploadPart = async (index: number): Promise<void> => {
+            const start = index * partSize;
+            const blob = file.slice(start, Math.min(file.size, start + partSize));
+            let lastError: Error = new Error('This part could not be uploaded.');
+            for (let attempt = 1; attempt <= 4; attempt++) {
+              try {
+                loadedByPart[index] = 0;
+                reportProgress();
+                const urlResponse = await fetch('/api/movies/multipart/part-url', {
+                  method: 'POST', credentials: 'include',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ key: init.key, uploadId: init.uploadId, partNumber: index + 1 }),
+                });
+                const signedPart = await urlResponse.json().catch(() => ({}));
+                if (!urlResponse.ok) throw new Error(signedPart.error || 'Could not prepare an upload part.');
+                const etag = await new Promise<string>((resolve, reject) => {
+                  const xhr = new XMLHttpRequest();
+                  xhr.open('PUT', signedPart.uploadUrl);
+                  xhr.timeout = 5 * 60 * 1000;
+                  xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+                  xhr.upload.onprogress = (event) => {
+                    if (event.lengthComputable) {
+                      loadedByPart[index] = event.loaded;
+                      reportProgress();
+                    }
+                  };
+                  xhr.onload = () => {
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                      const responseEtag = xhr.getResponseHeader('ETag');
+                      if (!responseEtag) reject(new Error('Storage did not confirm an uploaded part. Check the bucket CORS settings.'));
+                      else resolve(responseEtag);
+                    } else reject(new Error(`Storage rejected upload part ${index + 1} (HTTP ${xhr.status}).`));
+                  };
+                  xhr.onerror = () => reject(new Error('Temporary connection interruption.'));
+                  xhr.ontimeout = () => reject(new Error('Upload part timed out.'));
+                  xhr.onabort = () => reject(new Error('Upload cancelled.'));
+                  xhr.send(blob);
+                });
+                loadedByPart[index] = blob.size;
+                completedParts[index] = { PartNumber: index + 1, ETag: etag };
+                reportProgress();
+                return;
+              } catch (error: any) {
+                lastError = error instanceof Error ? error : new Error('Upload part failed.');
+                loadedByPart[index] = 0;
+                reportProgress();
+                if (attempt < 4) await new Promise(resolve => setTimeout(resolve, attempt * 1000));
+              }
+            }
+            throw new Error(`Could not upload video part ${index + 1} after several retries: ${lastError.message}`);
+          };
+          try {
+            let nextPart = 0;
+            const worker = async () => {
+              while (true) {
+                const index = nextPart++;
+                if (index >= partCount) return;
+                await uploadPart(index);
+              }
+            };
+            await Promise.all(Array.from({ length: Math.min(3, partCount) }, () => worker()));
+            const completeResponse = await fetch('/api/movies/multipart/complete', {
+              method: 'POST', credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ key: init.key, uploadId: init.uploadId, parts: completedParts }),
+            });
+            const completed = await completeResponse.json().catch(() => ({}));
+            if (!completeResponse.ok) throw new Error(completed.error || 'Could not finish storing the video.');
+            return completed.publicUrl || init.publicUrl;
+          } catch (error) {
+            await fetch('/api/movies/multipart/abort', {
+              method: 'POST', credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ key: init.key, uploadId: init.uploadId }),
+            }).catch(() => undefined);
+            throw error;
+          }
+        }
         const urlResponse = await fetch('/api/movies/upload-url', {
           method: 'POST',
           credentials: 'include',
