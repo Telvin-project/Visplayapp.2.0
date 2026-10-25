@@ -190,7 +190,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
     try {
       const res = await fetch(`/api/creators/channel/${creator.id}`);
       if (res.ok) {
-        const data = await res.json();
+        const data = await res.json().catch(() => ({} as any));
         setFollowersCount(data.followers_count || 0);
       }
     } catch (e) {
@@ -426,12 +426,17 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       if (!res.ok) {
         if (res.status === 402) {
           setPurchaseError('Your wallet balance is insufficient. Opening secure payment for this movie…');
-          const checkoutRes = await fetch('/api/purchases/movie/initialize', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ movie_id: movie.id }),
-          });
-          const checkout = await checkoutRes.json();
+          let checkoutRes: Response;
+          try {
+            checkoutRes = await fetch('/api/purchases/movie/initialize', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ movie_id: movie.id }),
+            });
+          } catch {
+            throw new Error('VisPlay could not reach its payment server. Please wait a moment and try again. You have not been charged.');
+          }
+          const checkout = await checkoutRes.json().catch(() => ({} as any));
           if (!checkoutRes.ok) throw new Error(checkout.error || 'Could not start movie payment.');
           if (checkout.already_owned) {
             setPaywallReached(false);
@@ -461,7 +466,10 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
         videoRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
       }
     } catch (err: any) {
-      setPurchaseError(err.message || 'Purchase error');
+      const message = err instanceof TypeError && /fetch/i.test(err.message)
+        ? 'Could not connect to the VisPlay payment server. Please try again in a moment. You have not been charged.'
+        : (err.message || 'Purchase error');
+      setPurchaseError(message);
     } finally {
       setPurchasing(false);
     }
@@ -605,7 +613,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       {/* ---------------- PLAYER CONTAINER ---------------- */}
       <div
         ref={playerContainerRef}
-        className={`visplay-player ${isFullscreen ? 'fixed inset-0 z-[100]' : 'sticky top-16 z-20 -mx-3 sm:mx-0 w-[calc(100%+1.5rem)] sm:w-full'} aspect-video bg-black overflow-hidden shadow-2xl border-y border-slate-800/80 group select-none`}
+        className={`visplay-player ${isFullscreen ? 'fixed inset-0 z-[100]' : 'sticky top-16 z-20 relative left-1/2 -translate-x-1/2 w-screen max-w-none sm:static sm:left-auto sm:translate-x-0 sm:w-full'} aspect-video bg-black overflow-hidden shadow-2xl border-y border-slate-800/80 group select-none`}
         onMouseMove={() => {
           setShowControls(true);
           if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
@@ -657,6 +665,17 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
           }}
         />
 
+        {showControls && !paywallReached && !videoLoadError && (
+          <button
+            type="button"
+            aria-label={isPlaying ? 'Pause movie' : 'Play movie'}
+            onClick={(event) => { event.stopPropagation(); handlePlayPause(); }}
+            className="absolute left-1/2 top-1/2 z-20 -translate-x-1/2 -translate-y-1/2 w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-black/55 border border-white/30 text-white shadow-xl backdrop-blur-sm flex items-center justify-center"
+          >
+            {isPlaying ? <Pause className="w-5 h-5 sm:w-6 sm:h-6" /> : <Play className="w-5 h-5 sm:w-6 sm:h-6 ml-0.5" />}
+          </button>
+        )}
+
         {videoLoadError && (
           <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-black/90 px-6 text-center">
             <Film className="h-10 w-10 text-rose-300" />
@@ -675,26 +694,26 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
 
         {/* ---------------- 5-MINUTE FREE PREVIEW PAYWALL OVERLAY ---------------- */}
         {paywallReached && !movie.is_purchased && (
-          <div className="absolute inset-0 z-30 bg-[#07090e]/95 backdrop-blur-md flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-300">
-            <div className="max-w-md w-full bg-[#0d121d] border border-cyan-500/40 rounded-3xl p-6 sm:p-8 text-center shadow-2xl text-slate-100">
-              <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
-                <Lock className="w-7 h-7" />
+          <div className="absolute inset-0 z-30 bg-[#07090e]/85 backdrop-blur-sm flex items-center justify-center p-2 sm:p-3 animate-in fade-in duration-300">
+            <div className="max-w-[300px] w-full max-h-full overflow-y-auto bg-[#0d121d] border border-cyan-500/40 rounded-2xl p-3 sm:p-4 text-center shadow-2xl text-slate-100">
+              <div className="w-9 h-9 mx-auto mb-2 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
+                <Lock className="w-4 h-4" />
               </div>
 
-              <span className="text-[11px] font-semibold tracking-wider text-cyan-400 uppercase bg-cyan-950/80 border border-cyan-800 px-3 py-1 rounded-full">
-                5-Minute Free Preview Ended
+              <span className="text-[9px] font-semibold tracking-wider text-cyan-400 uppercase bg-cyan-950/80 border border-cyan-800 px-2 py-1 rounded-full">
+                5-Minute Preview Ended
               </span>
 
-              <h3 className="text-xl sm:text-2xl font-bold font-display text-white mt-3 mb-1.5">
+              <h3 className="text-base sm:text-lg font-bold font-display text-white mt-2 mb-1 break-words">
                 Unlock "{movie.title}"
               </h3>
-              <p className="text-xs text-slate-300 mb-5">
+              <p className="text-[11px] text-slate-300 mb-3">
                 Enjoyed the first 5 minutes? Unlock the complete film for only{' '}
                 <strong className="text-cyan-300 font-mono text-sm">₦100</strong>.
               </p>
 
               {/* Wallet info */}
-              <div className="p-3 bg-slate-900 border border-slate-800 rounded-2xl mb-4 flex items-center justify-between text-xs">
+              <div className="p-2 bg-slate-900 border border-slate-800 rounded-xl mb-3 flex items-center justify-between text-[11px]">
                 <span className="text-slate-400">Your VisPlay Wallet</span>
                 <span className="font-bold text-cyan-300 font-mono text-sm">
                   ₦{(user?.wallet_balance || 0).toLocaleString()}
@@ -702,7 +721,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
               </div>
 
               {purchaseError && (
-                <div className="mb-4 p-2.5 bg-rose-950/70 border border-rose-800 rounded-xl text-xs text-rose-300">
+                <div className="mb-3 p-2 bg-rose-950/70 border border-rose-800 rounded-xl text-[11px]">
                   {purchaseError}
                 </div>
               )}
@@ -711,7 +730,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
                 <button
                   onClick={handlePurchaseMovie}
                   disabled={purchasing}
-                  className="w-full py-3.5 px-4 rounded-xl font-bold text-sm bg-gradient-to-r from-cyan-500 via-blue-600 to-fuchsia-600 hover:from-cyan-400 hover:to-fuchsia-500 text-white shadow-lg shadow-cyan-500/25 active:scale-[0.98] transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                  className="w-full py-2.5 px-3 rounded-xl font-bold text-xs bg-gradient-to-r from-cyan-500 via-blue-600 to-fuchsia-600 hover:from-cyan-400 hover:to-fuchsia-500 text-white shadow-lg shadow-cyan-500/25 active:scale-[0.98] transition-all disabled:opacity-50 flex items-center justify-center gap-2"
                 >
                   {purchasing ? (
                     <span>Unlocking Movie...</span>
@@ -726,7 +745,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
 
                 <button
                   onClick={() => openDepositModal()}
-                  className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 transition-colors flex items-center justify-center gap-2"
+                  className="w-full py-2 px-3 rounded-xl text-[11px] font-semibold bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 transition-colors flex items-center justify-center gap-2"
                 >
                   <Coins className="w-3.5 h-3.5 text-cyan-400" />
                   <span>Deposit Coins via Paystack</span>
