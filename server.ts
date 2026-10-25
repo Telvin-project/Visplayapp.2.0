@@ -495,7 +495,7 @@ async function startServer() {
     });
   });
 
-  app.patch('/api/creators/my-channel/media', requireCreator, async (req: AuthenticatedRequest, res: Response) => {
+  app.patch('/api/creators/my-channel/media', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     const db = loadDatabase();
     const currentUser = db.users.find(u => u.id === req.user!.id);
     const profile = db.creator_profiles.find(cp => cp.user_id === req.user!.id)
