@@ -1204,6 +1204,7 @@ async function startServer() {
       // Update duration and milestones
       event.duration_watched_seconds = Math.max(event.duration_watched_seconds, Math.floor(duration_watched_seconds || 0));
       event.last_position_seconds = Math.max(0, Math.floor(Number(req.body?.last_position_seconds ?? duration_watched_seconds) || 0));
+      if (req.user) event.user_id = req.user.id;
       event.created_at = now;
       if (reached_5_min) event.reached_5_min = true;
       if (completed) event.completed = true;
