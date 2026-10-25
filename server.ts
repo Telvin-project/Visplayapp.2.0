@@ -1895,7 +1895,7 @@ async function startServer() {
 
     // Notify every follower when a creator's film becomes public, including a direct movie link.
     if (movie.status === 'published' && creator) {
-      const followerIds = [...new Set(db.follows.filter(f => f.creator_user_id === creator.id).map(f => f.user_id))];
+      const followerIds = [...new Set(db.follows.filter(f => f.creator_user_id === creator.id).map(f => f.follower_user_id))];
       for (const followerId of followerIds) {
         if (followerId === creator.user_id) continue;
         db.notifications.push({
