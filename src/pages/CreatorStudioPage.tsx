@@ -485,7 +485,7 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
                 className="w-full text-xs text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-cyan-500/20 file:text-cyan-300 hover:file:bg-cyan-500/30 cursor-pointer"
               />
               <p className="text-[10px] text-slate-500">
-                Supports real file uploads up to 250MB. (Demo fallback stream provided if omitted).
+                Supports real file uploads up to 50MB while this storage limit is active. (Demo fallback stream provided if omitted).
               </p>
             </div>
 
