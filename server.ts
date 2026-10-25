@@ -98,11 +98,11 @@ async function ensureMediaBucket() {
       }
       if ((buckets || []).some(bucket => bucket.name === MEDIA_BUCKET)) return;
 
-      // Supabase project-wide upload limits can be lower than the app's former
-      // 250 MB request. Create the bucket at the compatible 50 MB free-tier cap.
+      // VisPlay supports feature films up to 250 MB per media object.
+      // Keep this bucket aligned with the server upload limits.
       const { error: createError } = await client.storage.createBucket(MEDIA_BUCKET, {
         public: true,
-        fileSizeLimit: 50 * 1024 * 1024,
+        fileSizeLimit: 250 * 1024 * 1024,
       });
       if (createError) {
         const { data: refreshedBuckets, error: refreshError } = await client.storage.listBuckets();
