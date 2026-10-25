@@ -45,6 +45,11 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
 
+  const updateUploadProgress = (progress: number) => {
+    setUploadProgress(progress);
+    window.dispatchEvent(new CustomEvent('visplay-upload-progress', { detail: { progress, active: progress > 0 && progress < 100, error: false } }));
+  };
+
   // Livestream Schedule State
   const [liveTitle, setLiveTitle] = useState('');
   const [liveDesc, setLiveDesc] = useState('');
@@ -113,7 +118,7 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
     setUploadError(null);
     setUploadSuccess(null);
     setUploading(true);
-    setUploadProgress(15);
+    updateUploadProgress(0);
 
     try {
       let videoUrl = '';
@@ -142,7 +147,7 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
           const reportProgress = () => {
             const loaded = loadedByPart.reduce((sum, value) => sum + value, 0);
             const ratio = Math.min(1, loaded / file.size);
-            setUploadProgress(Math.round(progressStart + ratio * (progressEnd - progressStart)));
+            updateUploadProgress(Math.round(progressStart + ratio * (progressEnd - progressStart)));
           };
           const uploadPart = async (index: number): Promise<void> => {
             const start = index * partSize;
@@ -246,7 +251,7 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
           xhr.upload.onprogress = (event) => {
             if (event.lengthComputable && event.total > 0) {
               const ratio = event.loaded / event.total;
-              setUploadProgress(Math.round(progressStart + ratio * (progressEnd - progressStart)));
+              updateUploadProgress(Math.round(progressStart + ratio * (progressEnd - progressStart)));
             }
           };
           xhr.onload = () => {
@@ -295,7 +300,7 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
         throw new Error(responseData.error || `Movie submission failed (HTTP ${response.status}).`);
       }
 
-      setUploadProgress(100);
+      updateUploadProgress(100);
       confetti({ particleCount: 50, spread: 60 });
       setUploadSuccess(`"${title}" submitted! It is now in the Super Admin moderation queue.`);
       
@@ -581,7 +586,7 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
                 className="w-full text-xs text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-cyan-500/20 file:text-cyan-300 hover:file:bg-cyan-500/30 cursor-pointer"
               />
               <p className="text-[10px] text-slate-500">
-                Supports real video uploads up to 500 MB. Large videos upload in resumable chunks. (Demo fallback stream provided if omitted).
+                Videos up to 500 MB are supported. Large videos upload in resumable chunks.
               </p>
             </div>
 
