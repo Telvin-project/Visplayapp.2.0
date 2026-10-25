@@ -167,7 +167,11 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onSele
     if (reason === null) return;
     if (!window.confirm(`Confirm removal of "${movie.title}" from the platform?`)) return;
     try {
-      const res = await fetch(`/api/movies/${encodeURIComponent(movie.id)}`, { method: 'DELETE' });
+      const res = await fetch(`/api/movies/${encodeURIComponent(movie.id)}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: reason.trim() }),
+      });
       const data = await res.json();
       if (!res.ok) {
         alert(data.error || 'Could not remove this movie.');
