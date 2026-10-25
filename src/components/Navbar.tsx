@@ -58,6 +58,14 @@ export const Navbar: React.FC<NavbarProps> = ({
     return () => { alive = false; window.clearInterval(timer); };
   }, [user?.id]);
 
+  // Close and clear Home search whenever the user leaves the discovery screen.
+  useEffect(() => {
+    if (currentView !== 'home') {
+      if (searchQuery) onSearchChange?.('');
+      setShowSearchInput(false);
+    }
+  }, [currentView, searchQuery, onSearchChange]);
+
   const unreadCount = notifications.filter(n => !n.is_read).length;
   const openNotifications = () => {
     setCurrentView('notifications');
