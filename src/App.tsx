@@ -15,6 +15,7 @@ import { UserDashboardPage } from './pages/UserDashboardPage';
 import { CreatorChannelPage } from './pages/CreatorChannelPage';
 import { CreatorsDirectoryPage } from './pages/CreatorsDirectoryPage';
 import { LivePremieresPage } from './pages/LivePremieresPage';
+import { NotificationsPage } from './pages/NotificationsPage';
 
 const AppContent: React.FC = () => {
   const { user, openAuthModal, openCreatorApplyModal } = useAuth();
@@ -167,6 +168,10 @@ const AppContent: React.FC = () => {
             onSelectCreator={handleSelectCreator}
             selectedBundleId={selectedBundleId}
           />
+        )}
+
+        {currentView === 'notifications' && (
+          <NotificationsPage onSelectMovie={handleSelectMovie} onBack={() => setCurrentView('home')} />
         )}
 
         {currentView === 'live' && (
