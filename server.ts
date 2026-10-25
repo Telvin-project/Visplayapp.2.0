@@ -856,6 +856,38 @@ async function startServer() {
     res.json({ bundle: { ...bundle, episodes, is_purchased: isPurchased }, creator });
   });
 
+  // Create a short-lived direct-to-Supabase upload URL so large videos do not
+  // have to pass through the Render server and its request timeout.
+  app.post('/api/movies/upload-url', requireCreator, async (req: AuthenticatedRequest, res: Response) => {
+    const { folder, filename, contentType, size } = req.body || {};
+    if (folder !== 'videos' && folder !== 'posters') {
+      res.status(400).json({ error: 'Invalid upload type.' });
+      return;
+    }
+    const maxSize = folder === 'videos' ? 250 * 1024 * 1024 : 15 * 1024 * 1024;
+    if (!Number.isFinite(Number(size)) || Number(size) <= 0 || Number(size) > maxSize) {
+      res.status(400).json({ error: folder === 'videos' ? 'Video must be 250MB or smaller.' : 'Poster must be 15MB or smaller.' });
+      return;
+    }
+    try {
+      await ensureMediaBucket();
+      const client = getMediaStorageClient();
+      const safeExtension = path.extname(String(filename || '')).toLowerCase().replace(/[^.a-z0-9]/g, '') || (folder === 'videos' ? '.mp4' : '.jpg');
+      const objectPath = `${folder}/${req.user!.id}/${Date.now()}-${uuidv4()}${safeExtension}`;
+      const { data, error } = await client.storage.from(MEDIA_BUCKET).createSignedUploadUrl(objectPath);
+      if (error || !data) throw error || new Error('Could not create a signed upload URL.');
+      res.json({
+        uploadUrl: data.signedUrl,
+        token: data.token,
+        path: data.path || objectPath,
+        publicUrl: client.storage.from(MEDIA_BUCKET).getPublicUrl(objectPath).data.publicUrl,
+      });
+    } catch (error) {
+      console.error('Could not prepare direct media upload:', error);
+      res.status(503).json({ error: 'Persistent storage is not ready for uploads. Please try again shortly.' });
+    }
+  });
+
   // Movie Upload (Creators Only)
   app.post(
     '/api/movies/upload',
@@ -875,9 +907,20 @@ async function startServer() {
         return;
       }
 
-      const files = req.files as { [fieldname: string]: Express.Multer.File[] };
+      const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
       const videoFile = files?.video?.[0];
       const posterFile = files?.poster?.[0];
+      const submittedVideoUrl = typeof req.body.video_url === 'string' ? req.body.video_url : '';
+      const submittedPosterUrl = typeof req.body.poster_url === 'string' ? req.body.poster_url : '';
+      const publicMediaPrefix = `${(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').replace(/\\/$/, '')}/storage/v1/object/public/${MEDIA_BUCKET}/`;
+      if (submittedVideoUrl && !submittedVideoUrl.startsWith(publicMediaPrefix)) {
+        res.status(400).json({ error: 'Invalid video storage URL.' });
+        return;
+      }
+      if (submittedPosterUrl && !submittedPosterUrl.startsWith(publicMediaPrefix)) {
+        res.status(400).json({ error: 'Invalid poster storage URL.' });
+        return;
+      }
 
       const db = loadDatabase();
       const creatorProfile = db.creator_profiles.find(cp => cp.user_id === req.user!.id);
@@ -894,8 +937,10 @@ async function startServer() {
       let posterUrl = '/posters/lagos_heist.jpg';
 
       try {
-        if (videoFile) videoUrl = await storeMovieMedia(videoFile, 'videos');
-        if (posterFile) posterUrl = await storeMovieMedia(posterFile, 'posters');
+        if (submittedVideoUrl) videoUrl = submittedVideoUrl;
+        else if (videoFile) videoUrl = await storeMovieMedia(videoFile, 'videos');
+        if (submittedPosterUrl) posterUrl = submittedPosterUrl;
+        else if (posterFile) posterUrl = await storeMovieMedia(posterFile, 'posters');
       } catch (storageError) {
         console.error('Permanent movie media upload failed:', storageError);
         res.status(503).json({
