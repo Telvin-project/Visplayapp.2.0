@@ -587,6 +587,17 @@ async function startServer() {
       ? db.purchases.filter(p => p.user_id === req.user!.id).map(p => p.item_id)
       : [];
 
+    // Prioritize films from creators the signed-in viewer follows.
+    if (req.user) {
+      const followedCreatorIds = new Set(db.follows
+        .filter(f => f.follower_user_id === req.user!.id)
+        .map(f => f.creator_user_id));
+      movies = [...movies].sort((a, b) => {
+        const aFollowed = followedCreatorIds.has(a.creator_id) ? 1 : 0;
+        const bFollowed = followedCreatorIds.has(b.creator_id) ? 1 : 0;
+        return bFollowed - aFollowed;
+      });
+    }
     const enhanced = movies.map(m => ({
       ...m,
       is_purchased: userPurchases.includes(m.id) || (m.bundle_id && userPurchases.includes(m.bundle_id)),
@@ -1181,6 +1192,7 @@ async function startServer() {
         movie_id: movieId,
         session_id: session_id || uuidv4(),
         duration_watched_seconds: Math.floor(duration_watched_seconds || 0),
+        last_position_seconds: Math.max(0, Math.floor(Number(req.body?.last_position_seconds ?? duration_watched_seconds) || 0)),
         reached_5_min: !!reached_5_min,
         completed: !!completed,
         converted_to_purchase: false,
@@ -1191,6 +1203,8 @@ async function startServer() {
     } else {
       // Update duration and milestones
       event.duration_watched_seconds = Math.max(event.duration_watched_seconds, Math.floor(duration_watched_seconds || 0));
+      event.last_position_seconds = Math.max(0, Math.floor(Number(req.body?.last_position_seconds ?? duration_watched_seconds) || 0));
+      event.created_at = now;
       if (reached_5_min) event.reached_5_min = true;
       if (completed) event.completed = true;
     }
@@ -1568,6 +1582,20 @@ async function startServer() {
     // Include movies purchased individually + movies in purchased bundles
     const movies = db.movies.filter(m => movieIds.includes(m.id) || (m.bundle_id && bundleIds.includes(m.bundle_id)));
     const bundles = db.bundles.filter(b => bundleIds.includes(b.id));
+    const userEvents = db.viewing_events
+      .filter(e => e.user_id === req.user!.id)
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    const latestEventByMovie = new Map<string, typeof userEvents[number]>();
+    for (const event of userEvents) {
+      if (!latestEventByMovie.has(event.movie_id)) latestEventByMovie.set(event.movie_id, event);
+    }
+    const watchHistory = Array.from(latestEventByMovie.values())
+      .map(event => {
+        const movie = db.movies.find(m => m.id === event.movie_id);
+        return movie ? { ...movie, last_position_seconds: event.last_position_seconds ?? event.duration_watched_seconds ?? 0, last_watched_at: event.created_at, is_purchased: movieIds.includes(movie.id) || Boolean(movie.bundle_id && bundleIds.includes(movie.bundle_id)) } : null;
+      })
+      .filter(Boolean)
+      .sort((a: any, b: any) => new Date(b.last_watched_at).getTime() - new Date(a.last_watched_at).getTime());
     const transactions = db.transactions.filter(t => t.user_id === req.user!.id).reverse();
     const followedCreators = db.follows
       .filter(f => f.follower_user_id === req.user!.id)
@@ -1577,6 +1605,7 @@ async function startServer() {
     res.json({
       movies,
       bundles,
+      watch_history: watchHistory,
       transactions,
       followed_creators: followedCreators,
       wallet_balance: req.user!.wallet_balance,
