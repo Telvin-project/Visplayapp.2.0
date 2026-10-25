@@ -35,6 +35,18 @@ const AppContent: React.FC = () => {
     return () => window.removeEventListener('visplay-upload-progress', handleUploadProgress);
   }, []);
 
+  useEffect(() => {
+    const handleMoviePaymentComplete = (event: Event) => {
+      const movieId = (event as CustomEvent<{ movieId?: string }>).detail?.movieId;
+      if (!movieId) return;
+      setSelectedMovieId(movieId);
+      setCurrentView('watch');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+    window.addEventListener('visplay-movie-payment-complete', handleMoviePaymentComplete);
+    return () => window.removeEventListener('visplay-movie-payment-complete', handleMoviePaymentComplete);
+  }, []);
+
   // Keep in-app navigation in browser history so Back returns to the previous VisPlay page.
   useEffect(() => {
     const currentState = { visplay: true, currentView, selectedMovieId, selectedCreatorId, selectedBundleId };
