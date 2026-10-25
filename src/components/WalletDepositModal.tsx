@@ -16,13 +16,16 @@ export const WalletDepositModal: React.FC = () => {
     const params = new URLSearchParams(window.location.search);
     const reference = params.get('reference') || params.get('trxref');
     if (!reference) return;
+    const watchMovieId = params.get('watch');
     params.delete('reference');
     params.delete('trxref');
+    params.delete('watch');
     const query = params.toString();
     window.history.replaceState({}, '', window.location.pathname + (query ? `?${query}` : '') + window.location.hash);
     (async () => {
       try {
-        const response = await fetch('/api/wallet/deposit/verify', {
+        const isMoviePayment = reference.startsWith('VIS_MOV_');
+        const response = await fetch(isMoviePayment ? '/api/purchases/movie/verify' : '/api/wallet/deposit/verify', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ reference }),
@@ -33,7 +36,13 @@ export const WalletDepositModal: React.FC = () => {
           return;
         }
         await refreshUser();
-        setSuccessMessage('Your wallet deposit has been verified successfully.');
+        if (isMoviePayment) {
+          const movieId = result.movie_id || watchMovieId;
+          window.dispatchEvent(new CustomEvent('visplay-movie-payment-complete', { detail: { movieId } }));
+          setSuccessMessage('Payment confirmed. Your movie is unlocked.');
+        } else {
+          setSuccessMessage('Your wallet deposit has been verified successfully.');
+        }
         confetti({ particleCount: 60, spread: 60, origin: { y: 0.6 } });
       } catch {
         setError('We could not verify this payment right now. Please try again.');

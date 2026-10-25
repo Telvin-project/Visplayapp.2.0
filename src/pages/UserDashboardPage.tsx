@@ -117,6 +117,7 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
   };
 
   const unlockedMovies: Movie[] = libraryData?.movies || [];
+  const watchHistory: Movie[] = libraryData?.watch_history || [];
   const unlockedBundles: EpisodeBundle[] = libraryData?.bundles || [];
   const transactions: WalletTransaction[] = libraryData?.transactions || [];
   const followedCreators: CreatorProfile[] = libraryData?.followed_creators || [];
@@ -187,7 +188,8 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
       {/* Tabs */}
       <div className="flex items-center gap-2 overflow-x-auto no-scrollbar border-b border-slate-800 pb-2">
         {[
-          { id: 'library', label: `My Purchases (${unlockedMovies.length})` },
+          { id: 'library', label: `Unlocked Movies (${unlockedMovies.length})` },
+          { id: 'history', label: `Watch History (${watchHistory.length})` },
           { id: 'wallet', label: 'Wallet & Paystack History' },
           { id: 'rewards', label: `Rewards & Streaks (${rewardPoints} Pts)` },
           { id: 'creators', label: `Followed Creators (${followedCreators.length})` },
@@ -228,6 +230,33 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
                   onSelectMovie={onSelectMovie}
                   onSelectCreator={onSelectCreator}
                 />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ---------------- WATCH HISTORY ---------------- */}
+      {activeTab === 'history' && (
+        <div className="space-y-5">
+          <div className="rounded-2xl border border-slate-800 bg-[#0d121d] p-4">
+            <h3 className="text-base font-bold text-white">Continue Watching</h3>
+            <p className="mt-1 text-xs text-slate-400">Pick up where you left off. Your last position is saved as you watch.</p>
+          </div>
+          {watchHistory.length === 0 ? (
+            <div className="rounded-3xl border border-slate-800 bg-[#0d121d] p-10 text-center">
+              <Play className="mx-auto h-9 w-9 text-slate-500" />
+              <h3 className="mt-3 font-bold text-white">No watch history yet</h3>
+              <p className="mt-1 text-xs text-slate-400">Movies you start watching will appear here.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+              {watchHistory.map((m: any) => (
+                <div key={m.id} className="space-y-2">
+                  <MovieCard movie={m} onSelectMovie={onSelectMovie} onSelectCreator={onSelectCreator} />
+                  <p className="text-[11px] text-cyan-300">Resume at {Math.floor((m.last_position_seconds || 0) / 60)}:{String(Math.floor((m.last_position_seconds || 0) % 60)).padStart(2, '0')}</p>
+                  <button type="button" onClick={() => onSelectMovie(m.id)} className="w-full rounded-lg border border-cyan-500/40 bg-cyan-500/10 py-2 text-xs font-bold text-cyan-200">Resume watching</button>
+                </div>
               ))}
             </div>
           )}
