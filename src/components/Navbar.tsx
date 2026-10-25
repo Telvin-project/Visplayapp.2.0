@@ -47,6 +47,14 @@ export const Navbar: React.FC<NavbarProps> = ({
     }
     setCurrentView(view);
   };
+
+  useEffect(() => {
+    // Also reset search when a movie, creator, or other page is opened from Home.
+    if (currentView !== 'home') {
+      if (searchQuery) onSearchChange?.('');
+      setShowSearchInput(false);
+    }
+  }, [currentView]);
   const [notifications, setNotifications] = useState<any[]>([]);
 
   useEffect(() => {
