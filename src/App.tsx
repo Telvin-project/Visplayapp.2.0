@@ -143,7 +143,7 @@ const AppContent: React.FC = () => {
       )}
 
       {/* Main Viewport Container */}
-      <main className="flex-1 w-full mx-auto px-3 sm:px-5 lg:px-8 pt-4 sm:pt-6 pb-20 md:pb-12">
+      <main className={`flex-1 w-full mx-auto ${currentView === 'watch' ? 'px-0 pt-0' : 'px-3 sm:px-5 lg:px-8 pt-4 sm:pt-6'} pb-20 md:pb-12`}>
         {currentView === 'home' && (
           <HomePage
             onSelectMovie={handleSelectMovie}
