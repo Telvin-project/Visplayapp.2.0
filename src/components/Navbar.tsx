@@ -39,6 +39,13 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showSearchInput, setShowSearchInput] = useState(false);
+
+  useEffect(() => {
+    if (currentView !== 'home') {
+      if (searchQuery) onSearchChange?.('');
+      setShowSearchInput(false);
+    }
+  }, [currentView]);
   const [notifications, setNotifications] = useState<any[]>([]);
 
   useEffect(() => {
