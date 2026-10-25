@@ -944,7 +944,7 @@ async function startServer() {
       } catch (storageError) {
         console.error('Permanent movie media upload failed:', storageError);
         res.status(503).json({
-          error: 'The video or poster could not be saved permanently. Please try again later.',
+          error: 'Permanent media storage failed: ' + (storageError instanceof Error ? storageError.message : 'unknown storage error'),
         });
         return;
       }
