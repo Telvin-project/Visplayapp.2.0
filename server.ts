@@ -1350,6 +1350,99 @@ async function startServer() {
     }
   });
 
+  // Pay directly for one movie through Paystack without crediting the viewer wallet.
+  app.post('/api/purchases/movie/initialize', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    const movie = loadDatabase().movies.find(m => m.id === req.body?.movie_id && m.status === 'published');
+    if (!movie) return void res.status(404).json({ error: 'Published movie not found.' });
+    const db = loadDatabase();
+    const owned = db.purchases.some(p => p.user_id === req.user!.id && (p.item_id === movie.id || (movie.bundle_id && p.item_id === movie.bundle_id)));
+    if (owned) return void res.json({ already_owned: true, movie_id: movie.id });
+    const price = Number(movie.price_ngn) || 100;
+    const secretKey = process.env.PAYSTACK_SECRET_KEY;
+    if (!secretKey) return void res.status(503).json({ error: 'Direct movie payments are not configured. Please fund your wallet and unlock using your balance.' });
+    const reference = `VIS_MOV_${Date.now()}_${uuidv4().substring(0, 8).toUpperCase()}`;
+    const baseCallback = process.env.PAYSTACK_CALLBACK_URL || 'https://visplayapp20.vercel.app/';
+    const callbackUrl = `${baseCallback}${baseCallback.includes('?') ? '&' : '?'}watch=${encodeURIComponent(movie.id)}`;
+    try {
+      const response = await fetch('https://api.paystack.co/transaction/initialize', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${secretKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: req.user!.email, amount: price * 100, currency: 'NGN', reference, callback_url: callbackUrl,
+          metadata: { user_id: req.user!.id, purpose: 'movie_purchase', movie_id: movie.id, movie_title: movie.title },
+        }),
+      });
+      const result = await response.json() as any;
+      if (!response.ok || !result.status || !result.data?.authorization_url) return void res.status(502).json({ error: 'Paystack could not start movie checkout. Please try again.' });
+      db.transactions.push({
+        id: `tx_${uuidv4().substring(0, 8)}`, user_id: req.user!.id, amount_ngn: price, type: 'purchase', status: 'pending',
+        reference, payment_method: 'paystack', description: `Direct payment to unlock movie: "${movie.title}"`,
+        metadata: { purpose: 'movie_purchase', movie_id: movie.id, paystack_access_code: result.data.access_code },
+        created_at: new Date().toISOString(),
+      });
+      await saveDatabase(db);
+      res.json({ reference, authorization_url: result.data.authorization_url, movie_id: movie.id });
+    } catch (error) {
+      console.error('Paystack movie checkout initialization failed:', error);
+      res.status(502).json({ error: 'Unable to connect to Paystack. Please try again.' });
+    }
+  });
+
+  app.post('/api/purchases/movie/verify', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    const reference = String(req.body?.reference || '').trim();
+    if (!reference) return void res.status(400).json({ error: 'Transaction reference is required.' });
+    const secretKey = process.env.PAYSTACK_SECRET_KEY;
+    if (!secretKey) return void res.status(503).json({ error: 'Paystack is not configured on the backend.' });
+    const db = loadDatabase();
+    const tx = db.transactions.find(t => t.reference === reference && t.user_id === req.user!.id && t.type === 'purchase' && t.metadata?.purpose === 'movie_purchase');
+    if (!tx) return void res.status(404).json({ error: 'Movie payment record not found.' });
+    const movieId = String(tx.metadata?.movie_id || '');
+    const movie = db.movies.find(m => m.id === movieId);
+    if (!movie) return void res.status(404).json({ error: 'The movie associated with this payment was not found.' });
+    const existingPurchase = db.purchases.find(p => p.user_id === req.user!.id && p.item_type === 'movie' && p.item_id === movie.id);
+    if (existingPurchase) {
+      tx.status = 'successful';
+      await saveDatabase(db);
+      return void res.json({ success: true, already_owned: true, movie_id: movie.id, purchase: existingPurchase });
+    }
+    if (tx.status === 'successful') return void res.status(409).json({ error: 'Payment is marked successful but the unlock record is missing. Contact support before paying again.' });
+    try {
+      const response = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, { headers: { Authorization: `Bearer ${secretKey}` } });
+      const result = await response.json() as any;
+      const payment = result?.data;
+      if (!response.ok || !result?.status || payment?.status !== 'success') return void res.status(402).json({ error: 'Paystack has not confirmed a successful movie payment yet.' });
+      if (payment.reference !== tx.reference || payment.currency !== 'NGN' || Number(payment.amount) !== tx.amount_ngn * 100 ||
+          (payment.metadata?.user_id && payment.metadata.user_id !== req.user!.id) ||
+          (payment.metadata?.movie_id && payment.metadata.movie_id !== movie.id) ||
+          payment.metadata?.purpose !== 'movie_purchase') {
+        return void res.status(400).json({ error: 'Payment details do not match this movie purchase.' });
+      }
+      const purchase: Purchase = { id: `pur_${uuidv4().substring(0, 8)}`, user_id: req.user!.id, item_type: 'movie', item_id: movie.id, amount_ngn: tx.amount_ngn, reference, created_at: new Date().toISOString() };
+      const creatorShare = Math.round(tx.amount_ngn * 0.85);
+      const platformFee = tx.amount_ngn - creatorShare;
+      const ledgerEntry: CreatorLedger = {
+        id: `led_${uuidv4().substring(0, 8)}`, creator_id: movie.creator_id, purchase_id: purchase.id, movie_id: movie.id,
+        gross_amount_ngn: tx.amount_ngn, creator_share_ngn: creatorShare, platform_fee_ngn: platformFee, status: 'accrued', created_at: new Date().toISOString(),
+      };
+      tx.status = 'successful';
+      db.purchases.push(purchase);
+      db.ledger.push(ledgerEntry);
+      movie.paid_unlocks_count = (movie.paid_unlocks_count || 0) + 1;
+      const viewing = db.viewing_events.find(v => v.user_id === req.user!.id && v.movie_id === movie.id);
+      if (viewing) viewing.converted_to_purchase = true;
+      db.notifications.push({
+        id: `notif_${uuidv4().substring(0, 8)}`, user_id: req.user!.id, title: 'Movie Unlocked!',
+        message: `Payment confirmed. "${movie.title}" is now unlocked for unlimited streaming.`,
+        link: `/watch/${movie.id}`, is_read: false, created_at: new Date().toISOString(),
+      });
+      await saveDatabase(db);
+      res.json({ success: true, movie_id: movie.id, purchase, ledger: ledgerEntry });
+    } catch (error) {
+      console.error('Paystack movie payment verification failed:', error);
+      res.status(502).json({ error: 'Could not verify movie payment. Please retry verification shortly.' });
+    }
+  });
+
   // Purchase Individual Movie (₦100)
   app.post('/api/purchases/buy-movie', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     const { movie_id } = req.body;
