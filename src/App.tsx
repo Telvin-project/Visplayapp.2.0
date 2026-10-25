@@ -24,6 +24,16 @@ const AppContent: React.FC = () => {
   const [selectedBundleId, setSelectedBundleId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const skipHistoryPush = useRef(false);
+  const [uploadStatus, setUploadStatus] = useState<{progress:number; active:boolean; error:boolean} | null>(null);
+
+  useEffect(() => {
+    const handleUploadProgress = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      if (detail) setUploadStatus({ progress: Number(detail.progress) || 0, active: Boolean(detail.active), error: Boolean(detail.error) });
+    };
+    window.addEventListener('visplay-upload-progress', handleUploadProgress);
+    return () => window.removeEventListener('visplay-upload-progress', handleUploadProgress);
+  }, []);
 
   // Keep in-app navigation in browser history so Back returns to the previous VisPlay page.
   useEffect(() => {
@@ -95,6 +105,16 @@ const AppContent: React.FC = () => {
         onSelectMovieId={handleSelectMovie}
       />
 
+      {uploadStatus && (uploadStatus.active || uploadStatus.error || uploadStatus.progress === 100) && (
+        <div className="sticky top-[76px] z-40 mx-3 sm:mx-5 mt-2 rounded-xl border border-cyan-500/30 bg-slate-950/95 p-3 shadow-xl backdrop-blur">
+          <div className="flex items-center justify-between gap-3 text-xs">
+            <span className="font-semibold text-white">{uploadStatus.error ? 'Upload interrupted' : uploadStatus.progress === 100 ? 'Upload complete' : 'Uploading movie — you can keep browsing VisPlay'}</span>
+            <span className="font-mono text-cyan-300">{uploadStatus.progress}%</span>
+          </div>
+          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-800"><div className="h-full rounded-full bg-cyan-400 transition-[width] duration-200" style={{width: `${uploadStatus.progress}%`}} /></div>
+        </div>
+      )}
+
       {/* Main Viewport Container */}
       <main className="flex-1 w-full mx-auto px-3 sm:px-5 lg:px-8 pt-4 sm:pt-6 pb-20 md:pb-12">
         {currentView === 'home' && (
@@ -142,9 +162,9 @@ const AppContent: React.FC = () => {
           />
         )}
 
-        {currentView === 'studio' && (
+        <div className={currentView === 'studio' ? 'contents' : 'hidden'} aria-hidden={currentView !== 'studio'}>
           <CreatorStudioPage onSelectMovie={handleSelectMovie} />
-        )}
+        </div>
 
         {currentView === 'admin' && (
           <SuperAdminDashboard onSelectMovie={handleSelectMovie} />
