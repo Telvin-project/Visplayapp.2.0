@@ -912,7 +912,7 @@ async function startServer() {
       const posterFile = files?.poster?.[0];
       const submittedVideoUrl = typeof req.body.video_url === 'string' ? req.body.video_url : '';
       const submittedPosterUrl = typeof req.body.poster_url === 'string' ? req.body.poster_url : '';
-      const publicMediaPrefix = `${(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').replace(/\\/$/, '')}/storage/v1/object/public/${MEDIA_BUCKET}/`;
+      const publicMediaPrefix = `${(process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').replace(/\/+$/, '')}/storage/v1/object/public/${MEDIA_BUCKET}/`;
       if (submittedVideoUrl && !submittedVideoUrl.startsWith(publicMediaPrefix)) {
         res.status(400).json({ error: 'Invalid video storage URL.' });
         return;
