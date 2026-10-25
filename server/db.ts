@@ -151,6 +151,7 @@ export interface ViewingEvent {
   movie_id: string;
   session_id: string;
   duration_watched_seconds: number;
+  last_position_seconds?: number;
   reached_5_min: boolean;
   completed: boolean;
   converted_to_purchase: boolean;
