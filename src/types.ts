@@ -48,6 +48,8 @@ export interface Movie {
   is_purchased?: boolean;
   likes_count?: number;
   is_liked?: boolean;
+  last_position_seconds?: number;
+  last_watched_at?: string;
 }
 
 export interface EpisodeBundle {
