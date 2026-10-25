@@ -57,6 +57,8 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
   const { user, openAuthModal, openDepositModal, refreshUser } = useAuth();
   const videoRef = useRef<HTMLVideoElement>(null);
   const playerContainerRef = useRef<HTMLDivElement>(null);
+  const lastTrackedSecondRef = useRef(0);
+  const resumePositionRef = useRef(0);
 
   // Playback state
   const [isPlaying, setIsPlaying] = useState(false);
@@ -158,10 +160,29 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       checkFollowStatus();
     }
 
-    // Reset playback on movie change
     setCurrentTime(0);
     setPaywallReached(false);
     setIsPlaying(false);
+    resumePositionRef.current = 0;
+    lastTrackedSecondRef.current = 0;
+    const localKey = `visplay-position:${user?.id || 'guest'}:${movie.id}`;
+    try { resumePositionRef.current = Math.max(0, Number(localStorage.getItem(localKey)) || 0); } catch { /* Optional resume cache. */ }
+    if (user) {
+      fetch('/api/user/library').then(response => response.ok ? response.json() : null).then(data => {
+        const item = data?.watch_history?.find((entry: any) => entry.id === movie.id);
+        if (!item) return;
+        const position = Math.max(0, Number(item.last_position_seconds) || 0);
+        resumePositionRef.current = position;
+        try { localStorage.setItem(localKey, String(position)); } catch { /* Optional resume cache. */ }
+        const video = videoRef.current;
+        if (video && video.readyState >= 1) {
+          const safePosition = movie.is_purchased ? position : Math.min(position, FREE_PREVIEW_LIMIT);
+          video.currentTime = safePosition;
+          setCurrentTime(safePosition);
+          if (!movie.is_purchased && position >= FREE_PREVIEW_LIMIT) { video.pause(); setPaywallReached(true); }
+        }
+      }).catch(() => undefined);
+    }
   }, [movie.id, user?.id]);
 
   const checkFollowStatus = async () => {
@@ -194,6 +215,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
     if (!videoRef.current) return;
     const current = videoRef.current.currentTime;
     setCurrentTime(current);
+    try { localStorage.setItem(`visplay-position:${user?.id || 'guest'}:${movie.id}`, String(Math.floor(current))); } catch { /* Optional resume cache. */ }
 
     // Enforce 5-minute (300 seconds) free preview if unpaid
     if (!movie.is_purchased && current >= FREE_PREVIEW_LIMIT) {
@@ -206,7 +228,8 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       trackViewingEvent(FREE_PREVIEW_LIMIT, true, false);
     } else {
       // Periodically track duration
-      if (Math.floor(current) % 30 === 0) {
+      if (Math.floor(current) - lastTrackedSecondRef.current >= 10) {
+        lastTrackedSecondRef.current = Math.floor(current);
         trackViewingEvent(current, current >= FREE_PREVIEW_LIMIT, false);
       }
     }
@@ -220,6 +243,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
         body: JSON.stringify({
           session_id: sessionId,
           duration_watched_seconds: durationSec,
+          last_position_seconds: Math.floor(durationSec),
           reached_5_min: reached5Min,
           completed,
         }),
@@ -592,6 +616,17 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
             setIsVideoReady(true);
             if (videoRef.current && videoRef.current.duration) {
               setDuration(videoRef.current.duration);
+              const savedPosition = Math.max(0, resumePositionRef.current || 0);
+              if (savedPosition > 0) {
+                const safePosition = movie.is_purchased ? Math.min(savedPosition, Math.max(0, videoRef.current.duration - 1)) : Math.min(savedPosition, FREE_PREVIEW_LIMIT);
+                videoRef.current.currentTime = safePosition;
+                setCurrentTime(safePosition);
+                if (!movie.is_purchased && savedPosition >= FREE_PREVIEW_LIMIT) {
+                  videoRef.current.pause();
+                  setIsPlaying(false);
+                  setPaywallReached(true);
+                }
+              }
             }
           }}
           onCanPlay={() => { setIsVideoReady(true); setVideoLoadError(false); }}
