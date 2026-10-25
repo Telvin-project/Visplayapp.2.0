@@ -33,6 +33,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   setCurrentView,
   onSearchChange,
   searchQuery = '',
+  onSelectMovieId,
 }) => {
   const { user, creatorProfile, logout, openAuthModal, openDepositModal, openCreatorApplyModal } = useAuth();
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
