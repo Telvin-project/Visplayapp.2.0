@@ -61,7 +61,6 @@ const AppContent: React.FC = () => {
     else url.searchParams.delete('watch');
     const target = `${url.pathname}${url.search}${url.hash}`;
     const currentState = { visplay: true, currentView, selectedMovieId, selectedCreatorId, selectedBundleId };
-    if (window.location.pathname + window.location.search + window.location.hash !== target) {
     if (skipHistoryPush.current) {
       skipHistoryPush.current = false;
       window.history.replaceState(currentState, '', target);
