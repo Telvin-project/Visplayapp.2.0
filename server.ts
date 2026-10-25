@@ -4,7 +4,7 @@ import fs from 'fs';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import multer from 'multer';
-import { S3Client, PutObjectCommand, DeleteObjectsCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, DeleteObjectsCommand, CreateMultipartUploadCommand, UploadPartCommand, CompleteMultipartUploadCommand, AbortMultipartUploadCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import cookieParser from 'cookie-parser';
 import { v4 as uuidv4 } from 'uuid';
@@ -837,6 +837,81 @@ async function startServer() {
     } catch (error) {
       console.error('Could not prepare direct R2 media upload:', error);
       res.status(503).json({ error: 'R2 upload setup failed: ' + (error instanceof Error ? error.message : 'Unknown storage error') });
+    }
+  });
+
+  // Resumable multipart uploads for large creator videos. Each part can be retried independently.
+  app.post('/api/movies/multipart/init', requireCreator, async (req: AuthenticatedRequest, res: Response) => {
+    const { folder, filename, contentType, size } = req.body || {};
+    if (folder !== 'videos' && folder !== 'posters') return void res.status(400).json({ error: 'Invalid upload type.' });
+    const maxSize = folder === 'videos' ? 250 * 1024 * 1024 : 15 * 1024 * 1024;
+    if (!Number.isFinite(Number(size)) || Number(size) <= 0 || Number(size) > maxSize) {
+      return void res.status(400).json({ error: folder === 'videos' ? 'Video must be 250MB or smaller.' : 'Poster must be 15MB or smaller.' });
+    }
+    try {
+      if (!isR2Configured()) throw new Error('Cloudflare R2 credentials are missing from the server environment.');
+      const ext = path.extname(String(filename || '')).toLowerCase().replace(/[^.a-z0-9]/g, '') || (folder === 'videos' ? '.mp4' : '.jpg');
+      const key = `${folder}/${req.user!.id}/${Date.now()}-${uuidv4()}${ext}`;
+      const created = await getR2Client().send(new CreateMultipartUploadCommand({
+        Bucket: MEDIA_BUCKET,
+        Key: key,
+        ContentType: String(contentType || (folder === 'videos' ? 'video/mp4' : 'image/jpeg')),
+        CacheControl: 'public, max-age=31536000, immutable',
+      }));
+      if (!created.UploadId) throw new Error('Storage did not return an upload session.');
+      res.json({ uploadId: created.UploadId, key, publicUrl: getR2PublicUrl(key) });
+    } catch (error) {
+      console.error('Could not start multipart R2 upload:', error);
+      res.status(503).json({ error: 'Could not start a resumable upload. Please try again.' });
+    }
+  });
+
+  app.post('/api/movies/multipart/part-url', requireCreator, async (req: AuthenticatedRequest, res: Response) => {
+    const { key, uploadId, partNumber } = req.body || {};
+    const ownsKey = typeof key === 'string' && (key.startsWith(`videos/${req.user!.id}/`) || key.startsWith(`posters/${req.user!.id}/`));
+    if (!ownsKey || typeof uploadId !== 'string' || !Number.isInteger(partNumber) || partNumber < 1 || partNumber > 10000) {
+      return void res.status(400).json({ error: 'Invalid upload part request.' });
+    }
+    try {
+      const uploadUrl = await getSignedUrl(getR2Client(), new UploadPartCommand({
+        Bucket: MEDIA_BUCKET, Key: key, UploadId: uploadId, PartNumber: partNumber,
+      }), { expiresIn: 900 });
+      res.json({ uploadUrl });
+    } catch (error) {
+      console.error('Could not prepare multipart upload part:', error);
+      res.status(503).json({ error: 'Could not prepare an upload part. Please retry.' });
+    }
+  });
+
+  app.post('/api/movies/multipart/complete', requireCreator, async (req: AuthenticatedRequest, res: Response) => {
+    const { key, uploadId, parts } = req.body || {};
+    const ownsKey = typeof key === 'string' && (key.startsWith(`videos/${req.user!.id}/`) || key.startsWith(`posters/${req.user!.id}/`));
+    if (!ownsKey || typeof uploadId !== 'string' || !Array.isArray(parts) || parts.length === 0 ||
+        parts.some((part: any) => !Number.isInteger(part.PartNumber) || part.PartNumber < 1 || typeof part.ETag !== 'string')) {
+      return void res.status(400).json({ error: 'Invalid multipart completion request.' });
+    }
+    try {
+      await getR2Client().send(new CompleteMultipartUploadCommand({
+        Bucket: MEDIA_BUCKET, Key: key, UploadId: uploadId,
+        MultipartUpload: { Parts: parts.sort((a: any, b: any) => a.PartNumber - b.PartNumber) },
+      }));
+      res.json({ publicUrl: getR2PublicUrl(key) });
+    } catch (error) {
+      console.error('Could not complete multipart R2 upload:', error);
+      res.status(503).json({ error: 'Storage could not complete the video upload. Please retry.' });
+    }
+  });
+
+  app.post('/api/movies/multipart/abort', requireCreator, async (req: AuthenticatedRequest, res: Response) => {
+    const { key, uploadId } = req.body || {};
+    const ownsKey = typeof key === 'string' && (key.startsWith(`videos/${req.user!.id}/`) || key.startsWith(`posters/${req.user!.id}/`));
+    if (!ownsKey || typeof uploadId !== 'string') return void res.status(400).json({ error: 'Invalid upload cancellation request.' });
+    try {
+      await getR2Client().send(new AbortMultipartUploadCommand({ Bucket: MEDIA_BUCKET, Key: key, UploadId: uploadId }));
+      res.json({ ok: true });
+    } catch (error) {
+      console.error('Could not abort multipart R2 upload:', error);
+      res.status(200).json({ ok: true });
     }
   });
 
