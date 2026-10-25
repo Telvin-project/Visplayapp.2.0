@@ -143,6 +143,7 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
           const init = await initResponse.json().catch(() => ({}));
           if (!initResponse.ok) throw new Error(init.error || 'Could not start resumable video upload.');
           const loadedByPart = new Array<number>(partCount).fill(0);
+          let maxReportedProgress = progressStart;
           const completedParts: Array<{ PartNumber: number; ETag: string }> = new Array(partCount);
           const reportProgress = () => {
             const loaded = loadedByPart.reduce((sum, value) => sum + value, 0);
