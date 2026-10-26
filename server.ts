@@ -545,7 +545,8 @@ async function startServer() {
 
     const movies = db.movies.filter(m => m.creator_id === profile.id && m.status === 'published');
     const followersCount = db.follows.filter(f => f.creator_user_id === profile.id).length;
-    res.json({ creator: profile, movies, followers_count: followersCount });
+    const isFollowing = Boolean(req.user && db.follows.some(f => f.follower_user_id === req.user!.id && f.creator_user_id === profile.id));
+    res.json({ creator: profile, movies, followers_count: followersCount, is_following: isFollowing });
   });
 
   app.post('/api/creators/follow/:id', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
