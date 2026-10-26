@@ -54,13 +54,13 @@ export const NotificationsPage: React.FC<NotificationsPageProps> = ({ onSelectMo
   };
 
   return (
-    <section className="box-border w-full min-w-0 max-w-4xl mx-auto px-0 sm:px-2 pb-24 overflow-x-hidden">
-      <div className="flex items-center gap-3 mb-5 min-w-0">
+    <section className="box-border w-full min-w-0 max-w-4xl mx-auto px-0 sm:px-2 pb-24 overflow-x-clip [overflow-wrap:anywhere]">
+      <div className="flex items-center gap-3 mb-5 min-w-0 w-full">
         <button onClick={onBack} className="w-10 h-10 shrink-0 rounded-xl border border-slate-800 bg-slate-900 flex items-center justify-center text-slate-300" aria-label="Back">
           <ArrowLeft className="w-4 h-4" />
         </button>
         <div className="min-w-0">
-          <h1 className="text-xl sm:text-2xl font-bold text-white break-words">Notifications</h1>
+          <h1 className="text-xl sm:text-2xl font-bold text-white break-words [overflow-wrap:anywhere]">Notifications</h1>
           <p className="text-xs text-slate-400 mt-1">Updates from creators and activity on your VisPlay account.</p>
         </div>
       </div>

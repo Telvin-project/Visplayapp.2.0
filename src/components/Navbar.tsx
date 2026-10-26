@@ -68,11 +68,14 @@ export const Navbar: React.FC<NavbarProps> = ({
   }, [currentView]);
 
   const unreadCount = notifications.filter(n => !n.is_read).length;
-  const openNotifications = () => {
-    setCurrentView('notifications');
+  const navigateTo = (view: string) => {
+    onSearchChange?.('');
+    setShowSearchInput(false);
+    setCurrentView(view);
     setMobileMenuOpen(false);
     setUserDropdownOpen(false);
   };
+  const openNotifications = () => navigateTo('notifications');
 
   return (
     <>
@@ -84,7 +87,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           <div className="flex items-center gap-3 shrink-0">
             <button
               onClick={() => {
-                setCurrentView('home');
+                navigateTo('home');
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
               className="flex items-center gap-2 text-left focus:outline-none group"
@@ -108,7 +111,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               Browse Movies
             </button>
             <button
-              onClick={() => setCurrentView('bundles')}
+              onClick={() => navigateTo('bundles')}
               className={`whitespace-nowrap transition-colors flex items-center gap-1.5 ${
                 currentView === 'bundles' ? 'text-fuchsia-400 font-semibold' : 'hover:text-white'
               }`}
@@ -119,7 +122,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               </span>
             </button>
             <button
-              onClick={() => setCurrentView('live')}
+              onClick={() => navigateTo('live')}
               className={`whitespace-nowrap transition-colors flex items-center gap-1.5 ${
                 currentView === 'live' ? 'text-rose-400 font-semibold' : 'hover:text-white'
               }`}
@@ -128,7 +131,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               <span>Live & Premieres</span>
             </button>
             <button
-              onClick={() => setCurrentView('creators')}
+              onClick={() => navigateTo('creators')}
               className={`whitespace-nowrap transition-colors ${
                 currentView === 'creators' ? 'text-cyan-400 font-semibold' : 'hover:text-white'
               }`}
@@ -139,7 +142,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             {/* Admin Quick Link if Super Admin */}
             {user?.role === 'admin' && (
               <button
-                onClick={() => setCurrentView('admin')}
+                onClick={() => navigateTo('admin')}
                 className={`whitespace-nowrap transition-colors flex items-center gap-1 text-amber-400 hover:text-amber-300 font-semibold ${
                   currentView === 'admin' ? 'underline decoration-amber-400 underline-offset-4' : ''
                 }`}
@@ -247,7 +250,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     </div>
 
                     <button
-                      onClick={() => setCurrentView('library')}
+                      onClick={() => navigateTo('library')}
                       className="w-full px-4 py-2 text-left hover:bg-slate-800/80 flex items-center gap-2 text-slate-200 transition-colors"
                     >
                       <FolderLock className="w-4 h-4 text-cyan-400" />
@@ -265,7 +268,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     {/* Creator Studio / Creator Apply */}
                     {creatorProfile?.status === 'approved' || user.role === 'creator' || user.role === 'admin' ? (
                       <button
-                        onClick={() => setCurrentView('studio')}
+                        onClick={() => navigateTo('studio')}
                         className="w-full px-4 py-2 text-left hover:bg-slate-800/80 flex items-center gap-2 text-fuchsia-300 transition-colors"
                       >
                         <Film className="w-4 h-4 text-fuchsia-400" />
@@ -293,7 +296,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     )}
 
                     <button
-                      onClick={() => setCurrentView('profile')}
+                      onClick={() => navigateTo('profile')}
                       className="w-full px-4 py-2 text-left hover:bg-slate-800/80 flex items-center gap-2 text-slate-200 transition-colors"
                     >
                       <UserIcon className="w-4 h-4 text-slate-400" />
