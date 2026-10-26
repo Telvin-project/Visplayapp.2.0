@@ -14,6 +14,8 @@ import {
   Coins,
   Heart,
   Share2,
+  Bookmark,
+  Scan,
   AlertTriangle,
   Send,
   Trash2,
@@ -59,6 +61,8 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
   const playerContainerRef = useRef<HTMLDivElement>(null);
   const lastTrackedSecondRef = useRef(0);
   const resumePositionRef = useRef(0);
+  const lastTapRef = useRef<{ at: number; x: number } | null>(null);
+  const [fitScreen, setFitScreen] = useState(false);
 
   // Playback state
   const [isPlaying, setIsPlaying] = useState(false);
@@ -82,6 +86,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
   const [isLiked, setIsLiked] = useState(movie.is_liked || false);
   const [likesCount, setLikesCount] = useState(movie.likes_count || 0);
   const [isFollowing, setIsFollowing] = useState(false);
+  const [isSaved, setIsSaved] = useState(false);
   const [followersCount, setFollowersCount] = useState(0);
 
   // Comments state
@@ -96,6 +101,24 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
 
   // Max free preview allowed: exactly 300 seconds (5 minutes)
   const FREE_PREVIEW_LIMIT = 300;
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(`visplay-saved-movies:${user?.id || 'guest'}`) || '[]');
+      setIsSaved(Array.isArray(saved) && saved.includes(movie.id));
+    } catch { setIsSaved(false); }
+  }, [movie.id, user?.id]);
+
+  const handleToggleSaved = () => {
+    const key = `visplay-saved-movies:${user?.id || 'guest'}`;
+    try {
+      const saved = JSON.parse(localStorage.getItem(key) || '[]');
+      const current = Array.isArray(saved) ? saved.filter((id: string) => typeof id === 'string') : [];
+      const next = isSaved ? current.filter((id: string) => id !== movie.id) : [...new Set([...current, movie.id])];
+      localStorage.setItem(key, JSON.stringify(next));
+      setIsSaved(!isSaved);
+    } catch (error) { console.error('Could not update saved movies', error); }
+  };
 
   useEffect(() => {
     // Check Picture-in-Picture browser support
@@ -158,6 +181,8 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
     // Check creator follow status
     if (creator && user) {
       checkFollowStatus();
+    } else {
+      setIsFollowing(false);
     }
 
     setCurrentTime(0);
@@ -192,6 +217,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       if (res.ok) {
         const data = await res.json().catch(() => ({} as any));
         setFollowersCount(data.followers_count || 0);
+        setIsFollowing(Boolean(data.is_following));
       }
     } catch (e) {
       console.error(e);
@@ -422,12 +448,33 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ movie_id: movie.id }),
       });
-      const checkout = await response.json().catch(() => ({} as any));
-      if (!response.ok) throw new Error(checkout.error || 'Could not start movie payment. Please try again.');
-      if (checkout.already_owned) {
-        setPaywallReached(false);
-        await onRefreshMovie();
-        return;
+
+      const data = await res.json().catch(() => ({} as any));
+      if (!res.ok) {
+        if (res.status === 402) {
+          setPurchaseError('Your wallet balance is insufficient. Opening secure payment for this movie…');
+          let checkoutRes: Response;
+          try {
+            checkoutRes = await fetch('/api/purchases/movie/initialize', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ movie_id: movie.id }),
+            });
+          } catch {
+            throw new Error('VisPlay could not reach its payment server. Please wait a moment and try again. You have not been charged.');
+          }
+          const checkout = await checkoutRes.json().catch(() => ({} as any));
+          if (!checkoutRes.ok) throw new Error(checkout.error || 'Could not start movie payment.');
+          if (checkout.already_owned) {
+            setPaywallReached(false);
+            await onRefreshMovie();
+            return;
+          }
+          if (!checkout.authorization_url) throw new Error('Paystack did not return a checkout link.');
+          window.location.assign(checkout.authorization_url);
+          return;
+        }
+        throw new Error(data.error || 'Failed to complete movie purchase');
       }
       if (!checkout.authorization_url) throw new Error('Paystack did not return a checkout link. Please try again.');
       // Persist the exact stop point before leaving for Paystack.
@@ -437,9 +484,10 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       window.location.assign(checkout.authorization_url);
     } catch (err: any) {
       const message = err instanceof TypeError && /fetch/i.test(err.message)
-        ? 'Could not connect to the VisPlay payment server. Please try again. You have not been charged.'
-        : (err.message || 'Payment setup failed. You have not been charged.');
+        ? 'Could not connect to the VisPlay payment server. Please try again in a moment. You have not been charged.'
+        : (err.message || 'Purchase error');
       setPurchaseError(message);
+    } finally {
       setPurchasing(false);
     }
   };
@@ -582,7 +630,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       {/* ---------------- PLAYER CONTAINER ---------------- */}
       <div
         ref={playerContainerRef}
-        className={`visplay-player ${isFullscreen ? 'fixed inset-0 z-[100]' : 'sticky top-16 z-30 w-full max-w-none rounded-none'} aspect-video bg-black overflow-hidden shadow-2xl border-y border-slate-800/80 group select-none`}
+        className={`visplay-player ${isFullscreen ? 'fixed inset-0 z-[100]' : 'relative left-1/2 -translate-x-1/2 w-screen max-w-none sm:static sm:left-auto sm:translate-x-0 sm:w-full'} aspect-video bg-black overflow-hidden shadow-2xl border-y border-slate-800/80 group select-none`}
         onMouseMove={() => {
           setShowControls(true);
           if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
@@ -593,7 +641,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
           ref={videoRef}
           src={resolveMediaUrl(movie.video_url)}
           poster={resolveMediaUrl(movie.poster_url) || resolveMediaUrl(movie.backdrop_url)}
-          className="block w-full h-full object-contain cursor-default"
+          className={`w-full h-full ${fitScreen ? 'object-cover' : 'object-contain'} cursor-default touch-manipulation`}
           playsInline
           width={1280}
           height={720}
@@ -624,10 +672,24 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
             trackViewingEvent(duration, true, true);
           }}
           onClick={(event) => {
-            // Prevent native video-surface clicks from toggling playback.
-            // Playback changes only through the explicit Play/Pause control.
+            // Single tap reveals controls; double-tap either side seeks 10 seconds.
             event.preventDefault();
-            event.stopPropagation();
+            const now = Date.now();
+            const x = event.nativeEvent.offsetX;
+            const previousTap = lastTapRef.current;
+            if (previousTap && now - previousTap.at < 320) {
+              const direction = x < event.currentTarget.clientWidth / 2 ? -1 : 1;
+              const video = videoRef.current;
+              if (video) {
+                const maxTime = movie.is_purchased ? duration : FREE_PREVIEW_LIMIT;
+                const target = Math.max(0, Math.min(maxTime, video.currentTime + direction * 10));
+                video.currentTime = target;
+                setCurrentTime(target);
+              }
+              lastTapRef.current = null;
+            } else {
+              lastTapRef.current = { at: now, x };
+            }
             setShowControls(true);
             if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
             controlsTimeoutRef.current = setTimeout(() => setShowControls(false), 3500);
@@ -830,6 +892,14 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
                 )}
 
                 <button
+                  onClick={() => setFitScreen(value => !value)}
+                  className={`p-2 rounded-lg hover:bg-white/10 transition-colors ${fitScreen ? 'text-cyan-300' : 'text-slate-300 hover:text-white'}`}
+                  title={fitScreen ? 'Fit entire video in screen' : 'Fill all four corners'}
+                  aria-label={fitScreen ? 'Fit video' : 'Fill screen'}
+                >
+                  <Scan className="w-4 h-4" />
+                </button>
+                <button
                   onClick={toggleFullscreen}
                   className="p-2 rounded-lg hover:bg-white/10 text-slate-300 hover:text-white transition-colors"
                   title="Fullscreen"
@@ -843,7 +913,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       </div>
 
       {/* ---------------- MOVIE METADATA & ACTIONS ---------------- */}
-      <div className="bg-[#0d121d] border border-slate-800/80 rounded-3xl p-6 md:p-8 space-y-6">
+      <div className="bg-[#0d121d] border-y sm:border sm:border-slate-800/80 rounded-none sm:rounded-3xl p-4 sm:p-6 md:p-8 space-y-5">
         <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
           <div className="space-y-2">
             <div className="flex items-center gap-2 text-xs text-slate-400">
@@ -878,6 +948,14 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
               <span className="font-mono">{likesCount}</span>
             </button>
 
+            <button
+              onClick={handleToggleSaved}
+              className={`p-2.5 rounded-xl border transition-colors ${isSaved ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300' : 'bg-slate-900 border-slate-800 text-slate-300 hover:text-white'}`}
+              title={isSaved ? 'Remove from saved movies' : 'Save movie'}
+              aria-label={isSaved ? 'Unsave movie' : 'Save movie'}
+            >
+              <Bookmark className={`w-4 h-4 ${isSaved ? 'fill-current' : ''}`} />
+            </button>
             <button
               onClick={handleShareMovie}
               className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-white transition-colors"
@@ -942,7 +1020,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       </div>
 
       {/* ---------------- COMMENTS & COMMUNITY DISCUSSION ---------------- */}
-      <div className="bg-[#0d121d] border border-slate-800/80 rounded-3xl p-6 md:p-8 space-y-6">
+      <div className="bg-[#0d121d] border-y sm:border sm:border-slate-800/80 rounded-none sm:rounded-3xl p-4 sm:p-6 md:p-8 space-y-5">
         <h3 className="text-base font-bold text-white flex items-center gap-2">
           <span>Audience Discussion</span>
           <span className="text-xs text-slate-400 font-mono">({comments.length})</span>
