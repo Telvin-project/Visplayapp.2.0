@@ -14,6 +14,7 @@ import {
   Coins,
   Heart,
   Share2,
+  Scan,
   AlertTriangle,
   Send,
   Trash2,
@@ -59,6 +60,8 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
   const playerContainerRef = useRef<HTMLDivElement>(null);
   const lastTrackedSecondRef = useRef(0);
   const resumePositionRef = useRef(0);
+  const lastTapRef = useRef<{ at: number; x: number } | null>(null);
+  const [fitScreen, setFitScreen] = useState(false);
 
   // Playback state
   const [isPlaying, setIsPlaying] = useState(false);
@@ -158,6 +161,8 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
     // Check creator follow status
     if (creator && user) {
       checkFollowStatus();
+    } else {
+      setIsFollowing(false);
     }
 
     setCurrentTime(0);
@@ -192,6 +197,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       if (res.ok) {
         const data = await res.json();
         setFollowersCount(data.followers_count || 0);
+        setIsFollowing(Boolean(data.is_following));
       }
     } catch (e) {
       console.error(e);
@@ -613,7 +619,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       {/* ---------------- PLAYER CONTAINER ---------------- */}
       <div
         ref={playerContainerRef}
-        className={`visplay-player ${isFullscreen ? 'fixed inset-0 z-[100]' : 'sticky top-16 z-20 relative left-1/2 -translate-x-1/2 w-screen max-w-none sm:static sm:left-auto sm:translate-x-0 sm:w-full'} aspect-video bg-black overflow-hidden shadow-2xl border-y border-slate-800/80 group select-none`}
+        className={`visplay-player ${isFullscreen ? 'fixed inset-0 z-[100]' : 'relative left-1/2 -translate-x-1/2 w-screen max-w-none sm:static sm:left-auto sm:translate-x-0 sm:w-full'} aspect-video bg-black overflow-hidden shadow-2xl border-y border-slate-800/80 group select-none`}
         onMouseMove={() => {
           setShowControls(true);
           if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
@@ -624,7 +630,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
           ref={videoRef}
           src={resolveMediaUrl(movie.video_url)}
           poster={resolveMediaUrl(movie.poster_url) || resolveMediaUrl(movie.backdrop_url)}
-          className="w-full h-full object-contain cursor-default"
+          className={`w-full h-full ${fitScreen ? 'object-cover' : 'object-contain'} cursor-default touch-manipulation`}
           playsInline
           width={1280}
           height={720}
@@ -655,8 +661,24 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
             trackViewingEvent(duration, true, true);
           }}
           onClick={(event) => {
-            // Tapping the video only reveals controls; playback changes only from Play/Pause.
+            // Single tap reveals controls; double-tap either side seeks 10 seconds.
             event.preventDefault();
+            const now = Date.now();
+            const x = event.nativeEvent.offsetX;
+            const previousTap = lastTapRef.current;
+            if (previousTap && now - previousTap.at < 320) {
+              const direction = x < event.currentTarget.clientWidth / 2 ? -1 : 1;
+              const video = videoRef.current;
+              if (video) {
+                const maxTime = movie.is_purchased ? duration : FREE_PREVIEW_LIMIT;
+                const target = Math.max(0, Math.min(maxTime, video.currentTime + direction * 10));
+                video.currentTime = target;
+                setCurrentTime(target);
+              }
+              lastTapRef.current = null;
+            } else {
+              lastTapRef.current = { at: now, x };
+            }
             setShowControls(true);
             if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
             controlsTimeoutRef.current = setTimeout(() => setShowControls(false), 3500);
@@ -848,6 +870,14 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
                 )}
 
                 <button
+                  onClick={() => setFitScreen(value => !value)}
+                  className={`p-2 rounded-lg hover:bg-white/10 transition-colors ${fitScreen ? 'text-cyan-300' : 'text-slate-300 hover:text-white'}`}
+                  title={fitScreen ? 'Fit entire video in screen' : 'Fill all four corners'}
+                  aria-label={fitScreen ? 'Fit video' : 'Fill screen'}
+                >
+                  <Scan className="w-4 h-4" />
+                </button>
+                <button
                   onClick={toggleFullscreen}
                   className="p-2 rounded-lg hover:bg-white/10 text-slate-300 hover:text-white transition-colors"
                   title="Fullscreen"
@@ -861,7 +891,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       </div>
 
       {/* ---------------- MOVIE METADATA & ACTIONS ---------------- */}
-      <div className="bg-[#0d121d] border border-slate-800/80 rounded-3xl p-6 md:p-8 space-y-6">
+      <div className="bg-[#0d121d] border-y sm:border sm:border-slate-800/80 rounded-none sm:rounded-3xl p-4 sm:p-6 md:p-8 space-y-5">
         <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
           <div className="space-y-2">
             <div className="flex items-center gap-2 text-xs text-slate-400">
@@ -960,7 +990,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       </div>
 
       {/* ---------------- COMMENTS & COMMUNITY DISCUSSION ---------------- */}
-      <div className="bg-[#0d121d] border border-slate-800/80 rounded-3xl p-6 md:p-8 space-y-6">
+      <div className="bg-[#0d121d] border-y sm:border sm:border-slate-800/80 rounded-none sm:rounded-3xl p-4 sm:p-6 md:p-8 space-y-5">
         <h3 className="text-base font-bold text-white flex items-center gap-2">
           <span>Audience Discussion</span>
           <span className="text-xs text-slate-400 font-mono">({comments.length})</span>
