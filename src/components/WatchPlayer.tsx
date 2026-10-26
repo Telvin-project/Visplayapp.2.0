@@ -582,7 +582,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       {/* ---------------- PLAYER CONTAINER ---------------- */}
       <div
         ref={playerContainerRef}
-        className={`visplay-player ${isFullscreen ? 'fixed inset-0 z-[100]' : 'sticky top-16 z-30 w-full max-w-none'} aspect-video bg-black overflow-hidden shadow-2xl border-y border-slate-800/80 group select-none`}
+        className={`visplay-player ${isFullscreen ? 'fixed inset-0 z-[100]' : 'sticky top-16 z-30 w-full max-w-none rounded-none'} aspect-video bg-black overflow-hidden shadow-2xl border-y border-slate-800/80 group select-none`}
         onMouseMove={() => {
           setShowControls(true);
           if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
@@ -593,7 +593,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
           ref={videoRef}
           src={resolveMediaUrl(movie.video_url)}
           poster={resolveMediaUrl(movie.poster_url) || resolveMediaUrl(movie.backdrop_url)}
-          className="w-full h-full object-contain cursor-default"
+          className="block w-full h-full object-contain cursor-default"
           playsInline
           width={1280}
           height={720}
