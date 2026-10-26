@@ -40,6 +40,21 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showSearchInput, setShowSearchInput] = useState(false);
 
+  const navigateTo = (view: string) => {
+    if (view !== 'home') {
+      onSearchChange?.('');
+      setShowSearchInput(false);
+    }
+    setCurrentView(view);
+  };
+
+  useEffect(() => {
+    // Also reset search when a movie, creator, or other page is opened from Home.
+    if (currentView !== 'home') {
+      if (searchQuery) onSearchChange?.('');
+      setShowSearchInput(false);
+    }
+  }, [currentView]);
   const [notifications, setNotifications] = useState<any[]>([]);
 
   useEffect(() => {
@@ -59,23 +74,12 @@ export const Navbar: React.FC<NavbarProps> = ({
     return () => { alive = false; window.clearInterval(timer); };
   }, [user?.id]);
 
-  // Close and clear Home search whenever the user leaves the discovery screen.
-  useEffect(() => {
-    if (currentView !== 'home') {
-      if (searchQuery) onSearchChange?.('');
-      setShowSearchInput(false);
-    }
-  }, [currentView]);
-
   const unreadCount = notifications.filter(n => !n.is_read).length;
-  const navigateTo = (view: string) => {
-    onSearchChange?.('');
-    setShowSearchInput(false);
-    setCurrentView(view);
+  const openNotifications = () => {
+    navigateTo('notifications');
     setMobileMenuOpen(false);
     setUserDropdownOpen(false);
   };
-  const openNotifications = () => navigateTo('notifications');
 
   return (
     <>
@@ -103,7 +107,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           {/* Zone 2: Navigation Links */}
           <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-300">
             <button
-              onClick={() => setCurrentView('home')}
+              onClick={() => navigateTo('home')}
               className={`whitespace-nowrap transition-colors ${
                 currentView === 'home' ? 'text-cyan-400 font-semibold' : 'hover:text-white'
               }`}
@@ -287,7 +291,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     {/* Admin Portal */}
                     {user.role === 'admin' && (
                       <button
-                        onClick={() => setCurrentView('admin')}
+                        onClick={() => navigateTo('admin')}
                         className="w-full px-4 py-2 text-left hover:bg-slate-800/80 flex items-center gap-2 text-amber-300 transition-colors"
                       >
                         <ShieldAlert className="w-4 h-4 text-amber-400" />
@@ -339,7 +343,7 @@ export const Navbar: React.FC<NavbarProps> = ({
       <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-[#07090e]/95 backdrop-blur-md border-t border-slate-800/80 px-2 py-2">
         <div className="grid grid-cols-5 items-center justify-around text-center">
           <button
-            onClick={() => setCurrentView('home')}
+            onClick={() => navigateTo('home')}
             className={`flex flex-col items-center py-1 transition-colors ${
               currentView === 'home' ? 'text-cyan-400 font-semibold' : 'text-slate-400'
             }`}
@@ -349,7 +353,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           </button>
 
           <button
-            onClick={() => setCurrentView('bundles')}
+            onClick={() => navigateTo('bundles')}
             className={`flex flex-col items-center py-1 transition-colors ${
               currentView === 'bundles' ? 'text-fuchsia-400 font-semibold' : 'text-slate-400'
             }`}
@@ -361,7 +365,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             onClick={() => {
               if (creatorProfile?.status === 'approved' || user?.role === 'creator' || user?.role === 'admin') {
-                setCurrentView('studio');
+                navigateTo('studio');
               } else {
                 openCreatorApplyModal();
               }
@@ -391,7 +395,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             onClick={() => {
               if (user) {
-                setCurrentView('library');
+                navigateTo('library');
               } else {
                 openAuthModal('login');
               }
