@@ -14,6 +14,7 @@ import {
   Coins,
   Heart,
   Share2,
+  Bookmark,
   Scan,
   AlertTriangle,
   Send,
@@ -85,6 +86,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
   const [isLiked, setIsLiked] = useState(movie.is_liked || false);
   const [likesCount, setLikesCount] = useState(movie.likes_count || 0);
   const [isFollowing, setIsFollowing] = useState(false);
+  const [isSaved, setIsSaved] = useState(false);
   const [followersCount, setFollowersCount] = useState(0);
 
   // Comments state
@@ -99,6 +101,24 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
 
   // Max free preview allowed: exactly 300 seconds (5 minutes)
   const FREE_PREVIEW_LIMIT = 300;
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(`visplay-saved-movies:${user?.id || 'guest'}`) || '[]');
+      setIsSaved(Array.isArray(saved) && saved.includes(movie.id));
+    } catch { setIsSaved(false); }
+  }, [movie.id, user?.id]);
+
+  const handleToggleSaved = () => {
+    const key = `visplay-saved-movies:${user?.id || 'guest'}`;
+    try {
+      const saved = JSON.parse(localStorage.getItem(key) || '[]');
+      const current = Array.isArray(saved) ? saved.filter((id: string) => typeof id === 'string') : [];
+      const next = isSaved ? current.filter((id: string) => id !== movie.id) : [...new Set([...current, movie.id])];
+      localStorage.setItem(key, JSON.stringify(next));
+      setIsSaved(!isSaved);
+    } catch (error) { console.error('Could not update saved movies', error); }
+  };
 
   useEffect(() => {
     // Check Picture-in-Picture browser support
@@ -926,6 +946,14 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
               <span className="font-mono">{likesCount}</span>
             </button>
 
+            <button
+              onClick={handleToggleSaved}
+              className={`p-2.5 rounded-xl border transition-colors ${isSaved ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300' : 'bg-slate-900 border-slate-800 text-slate-300 hover:text-white'}`}
+              title={isSaved ? 'Remove from saved movies' : 'Save movie'}
+              aria-label={isSaved ? 'Unsave movie' : 'Save movie'}
+            >
+              <Bookmark className={`w-4 h-4 ${isSaved ? 'fill-current' : ''}`} />
+            </button>
             <button
               onClick={handleShareMovie}
               className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-white transition-colors"
