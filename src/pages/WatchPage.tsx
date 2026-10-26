@@ -73,7 +73,7 @@ export const WatchPage: React.FC<WatchPageProps> = ({
   }
 
   return (
-    <div className="space-y-8 pb-16">
+    <div className="w-full min-w-0 space-y-8 pb-16 overflow-x-clip">
       {/* Back button */}
       <div>
         <button
