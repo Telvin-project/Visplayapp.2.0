@@ -545,7 +545,8 @@ async function startServer() {
 
     const movies = db.movies.filter(m => m.creator_id === profile.id && m.status === 'published');
     const followersCount = db.follows.filter(f => f.creator_user_id === profile.id).length;
-    res.json({ creator: profile, movies, followers_count: followersCount });
+    const isFollowing = Boolean(req.user && db.follows.some(f => f.follower_user_id === req.user!.id && f.creator_user_id === profile.id));
+    res.json({ creator: profile, movies, followers_count: followersCount, is_following: isFollowing });
   });
 
   app.post('/api/creators/follow/:id', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
@@ -1921,22 +1922,6 @@ async function startServer() {
     // Notify every follower when a creator's film becomes public, including a direct movie link.
     if (movie.status === 'published' && creator) {
       const followerIds = [...new Set(db.follows.filter(f => f.creator_user_id === creator.id).map(f => f.follower_user_id))];
-      for (const followerId of followerIds) {
-        if (followerId === creator.user_id) continue;
-        db.notifications.push({
-          id: `notif_${uuidv4().substring(0, 8)}`,
-          user_id: followerId,
-          title: `${creator.channel_name} posted a new movie`,
-          message: `Now available: "${movie.title}". Tap to watch the 5-minute preview.`,
-          link: `/?watch=${encodeURIComponent(movie.id)}`,
-          is_read: false,
-          created_at: new Date().toISOString(),
-        });
-      }
-    }
-
-    if (movie.status === 'published' && !wasPublished && creator) {
-      const followerIds = [...new Set(db.follows.filter(f => f.creator_user_id === creator.id).map(f => f.user_id))];
       for (const followerId of followerIds) {
         if (followerId === creator.user_id) continue;
         db.notifications.push({
