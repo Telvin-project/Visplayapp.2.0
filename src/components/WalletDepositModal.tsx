@@ -38,6 +38,19 @@ export const WalletDepositModal: React.FC = () => {
         await refreshUser();
         if (isMoviePayment) {
           const movieId = result.movie_id || watchMovieId;
+          if (movieId && user?.id) {
+            // Preserve the precise stop point across the external checkout redirect.
+            // The player stores this position before opening checkout; the 5-minute
+            // boundary is the safe fallback if the browser did not retain that value.
+            const positionKey = `visplay-position:${user.id}:${movieId}`;
+            const resumeKey = `visplay-resume-after-payment:${user.id}:${movieId}`;
+            try {
+              const savedPosition = Number(localStorage.getItem(positionKey)) || 0;
+              const resumePosition = Math.max(300, savedPosition);
+              localStorage.setItem(positionKey, String(resumePosition));
+              localStorage.setItem(resumeKey, String(resumePosition));
+            } catch { /* The player can fall back to server watch history. */ }
+          }
           window.dispatchEvent(new CustomEvent('visplay-movie-payment-complete', { detail: { movieId } }));
           setSuccessMessage('Payment confirmed. Your movie is unlocked.');
         } else {
