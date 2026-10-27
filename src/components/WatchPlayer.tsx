@@ -64,6 +64,8 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
   const lastTrackedSecondRef = useRef(0);
   const resumePositionRef = useRef(0);
   const lastTapRef = useRef<{ at: number; x: number } | null>(null);
+  const tapTimeoutRef = useRef<number | null>(null);
+  const lastTouchAtRef = useRef(0);
   const touchStartRef = useRef<{ x: number; y: number; at: number } | null>(null);
   const [fitScreen, setFitScreen] = useState(false);
   const [brightness, setBrightness] = useState(1);
@@ -644,11 +646,15 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
     const touch = event.changedTouches[0];
     const start = touchStartRef.current;
     if (!touch || !start || !playerContainerRef.current) return;
+    lastTouchAtRef.current = Date.now();
     const dx = touch.clientX - start.x;
     const dy = touch.clientY - start.y;
     const bounds = playerContainerRef.current.getBoundingClientRect();
 
     if (Math.abs(dy) > 35 && Math.abs(dy) > Math.abs(dx)) {
+      if (tapTimeoutRef.current !== null) window.clearTimeout(tapTimeoutRef.current);
+      tapTimeoutRef.current = null;
+      lastTapRef.current = null;
       const change = Math.min(0.25, Math.abs(dy) / Math.max(bounds.height, 1));
       if (start.x < bounds.left + bounds.width / 2) {
         setBrightness(value => Math.max(0.35, Math.min(1, value + (dy < 0 ? change : -change))));
@@ -661,6 +667,8 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
         setGestureNotice('volume');
       }
       setShowControls(true);
+      if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+      controlsTimeoutRef.current = setTimeout(() => setShowControls(false), 3500);
       window.setTimeout(() => setGestureNotice(null), 900);
       touchStartRef.current = null;
       return;
@@ -671,6 +679,8 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       const previous = lastTapRef.current;
       const tapX = touch.clientX - bounds.left;
       if (previous && now - previous.at < 300 && ((tapX < bounds.width / 2) === (previous.x < bounds.width / 2))) {
+        if (tapTimeoutRef.current !== null) window.clearTimeout(tapTimeoutRef.current);
+        tapTimeoutRef.current = null;
         const direction = tapX < bounds.width / 2 ? -10 : 10;
         const video = videoRef.current;
         if (video) {
@@ -683,9 +693,23 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
           window.setTimeout(() => setGestureNotice(null), 900);
         }
         lastTapRef.current = null;
+        setShowControls(true);
+        if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+        controlsTimeoutRef.current = setTimeout(() => setShowControls(false), 3500);
       } else {
         lastTapRef.current = { at: now, x: tapX };
-        setShowControls(true);
+        if (tapTimeoutRef.current !== null) window.clearTimeout(tapTimeoutRef.current);
+        tapTimeoutRef.current = window.setTimeout(() => {
+          setShowControls(current => {
+            const next = !current;
+            if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+            if (next) {
+              controlsTimeoutRef.current = setTimeout(() => setShowControls(false), 3500);
+            }
+            return next;
+          });
+          tapTimeoutRef.current = null;
+        }, 300);
       }
     }
     touchStartRef.current = null;
@@ -747,13 +771,18 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
             trackViewingEvent(duration, true, true);
           }}
           onClick={(event) => {
-            // Prevent native video-surface clicks from toggling playback.
+            // Mobile browsers synthesize a click after touch; the touch handler already
+            // manages that tap, so don't override its show/hide toggle.
+            if (Date.now() - lastTouchAtRef.current < 500) return;
             // Playback changes only through the explicit Play/Pause control.
             event.preventDefault();
             event.stopPropagation();
-            setShowControls(true);
-            if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
-            controlsTimeoutRef.current = setTimeout(() => setShowControls(false), 3500);
+            setShowControls(current => {
+              const next = !current;
+              if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+              if (next) controlsTimeoutRef.current = setTimeout(() => setShowControls(false), 3500);
+              return next;
+            });
           }}
         />
 
