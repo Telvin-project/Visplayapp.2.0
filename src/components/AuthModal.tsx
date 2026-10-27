@@ -6,12 +6,8 @@ import {
   Mail,
   User as UserIcon,
   Phone,
-  ShieldCheck,
-  Sparkles,
   AlertCircle,
   Loader2,
-  ChevronDown,
-  ChevronUp,
 } from 'lucide-react';
 
 export const AuthModal: React.FC = () => {
@@ -72,17 +68,6 @@ export const AuthModal: React.FC = () => {
     setLocalSubmitting(false);
   };
 
-  const handleQuickDemoLogin = async (demoEmail: string, demoPass: string) => {
-    setEmail(demoEmail);
-    setPassword(demoPass);
-    setError(null);
-    setLocalSubmitting(true);
-    const res = await login(demoEmail, demoPass);
-    if (!res.success) {
-      setError(res.error || 'Quick login failed');
-    }
-    setLocalSubmitting(false);
-  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200 overflow-y-auto">
@@ -259,42 +244,6 @@ export const AuthModal: React.FC = () => {
           </button>
         </form>
 
-        {/* Quick Demo Accounts for Seamless Testing */}
-        <div className="mt-6 pt-5 border-t border-slate-800/80">
-          <p className="text-[11px] font-medium text-slate-400 text-center mb-2.5 flex items-center justify-center gap-1.5">
-            <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
-            <span>Instant Role Testing (One-Click)</span>
-          </p>
-          <div className="grid grid-cols-3 gap-2">
-            <button
-              type="button"
-              disabled={submitting}
-              onClick={() => handleQuickDemoLogin('viewer@visplay.ng', 'viewer123')}
-              className="py-1.5 px-2 bg-slate-900/90 hover:bg-slate-800 border border-slate-800 rounded-lg text-[11px] font-medium text-cyan-300 hover:border-cyan-500/50 transition-all text-center disabled:opacity-50"
-            >
-              👤 Viewer
-              <span className="block text-[9px] text-slate-400">₦1,500 coins</span>
-            </button>
-            <button
-              type="button"
-              disabled={submitting}
-              onClick={() => handleQuickDemoLogin('kunle@nollywood.ng', 'creator123')}
-              className="py-1.5 px-2 bg-slate-900/90 hover:bg-slate-800 border border-slate-800 rounded-lg text-[11px] font-medium text-fuchsia-300 hover:border-fuchsia-500/50 transition-all text-center disabled:opacity-50"
-            >
-              🎬 Creator
-              <span className="block text-[9px] text-slate-400">Studio & Movies</span>
-            </button>
-            <button
-              type="button"
-              disabled={submitting}
-              onClick={() => handleQuickDemoLogin('talk2visibyl@gmail.com', 'admin123')}
-              className="py-1.5 px-2 bg-slate-900/90 hover:bg-slate-800 border border-slate-800 rounded-lg text-[11px] font-medium text-amber-300 hover:border-amber-500/50 transition-all text-center disabled:opacity-50"
-            >
-              🛡️ Super Admin
-              <span className="block text-[9px] text-slate-400">Full Control</span>
-            </button>
-          </div>
-        </div>
       </div>
     </div>
   );
