@@ -14,6 +14,7 @@ import {
   AlertCircle,
   Plus,
   ArrowRight,
+  Trash2,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -28,7 +29,7 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
   onSelectCreator,
   onSelectBundle,
 }) => {
-  const { user, updateProfile, openDepositModal, refreshUser, openCreatorApplyModal, creatorProfile, openAuthModal } = useAuth();
+  const { user, updateProfile, openDepositModal, refreshUser, openCreatorApplyModal, creatorProfile, openAuthModal, logout } = useAuth();
   const [activeTab, setActiveTab] = useState<'library' | 'history' | 'wallet' | 'creators' | 'notifications' | 'profile'>('library');
   const [libraryData, setLibraryData] = useState<any>(null);
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -40,6 +41,8 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
   const [avatarUrl, setAvatarUrl] = useState(user?.avatar_url || '');
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileMessage, setProfileMessage] = useState<string | null>(null);
+  const [deletingAccount, setDeletingAccount] = useState(false);
+  const [deleteAccountError, setDeleteAccountError] = useState<string | null>(null);
 
   useEffect(() => {
     if (user) {
@@ -86,6 +89,35 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
       setProfileMessage(res.error || 'Failed to update profile.');
     }
     setProfileSaving(false);
+  };
+
+  const handleDeleteAccount = async () => {
+    setDeleteAccountError(null);
+    const confirmed = window.confirm(
+      'Permanently delete your VisPlay account? Your profile, comments, follows, watch history, and any creator content you uploaded will be removed. Any remaining wallet balance will be lost. Necessary financial records may be retained in anonymized form. This cannot be undone.'
+    );
+    if (!confirmed) return;
+
+    setDeletingAccount(true);
+    try {
+      const response = await fetch('/api/auth/account', {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: true }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setDeleteAccountError(result.error || 'We could not delete your account. Please try again later.');
+        return;
+      }
+      await logout();
+      window.location.assign('/');
+    } catch (error: any) {
+      setDeleteAccountError(error?.message || 'Network error. Your account has not been confirmed as deleted.');
+    } finally {
+      setDeletingAccount(false);
+    }
   };
 
   const unlockedMovies: Movie[] = libraryData?.movies || [];
@@ -381,6 +413,29 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
               {profileSaving ? 'Saving Changes...' : 'Save Profile Changes'}
             </button>
           </form>
+
+          <div className="mt-8 border-t border-red-900/50 pt-6 space-y-3">
+            <div>
+              <h4 className="text-sm font-bold text-red-300">Delete Account</h4>
+              <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                Permanently remove your VisPlay account and associated personal data. Creator uploads and comments may also be removed. Financial records required for accounting or fraud prevention may be retained in anonymized form. Any unused wallet balance will be lost.
+              </p>
+            </div>
+            {deleteAccountError && (
+              <div role="alert" className="rounded-xl border border-red-800 bg-red-950/50 p-3 text-xs text-red-200">
+                {deleteAccountError}
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={handleDeleteAccount}
+              disabled={deletingAccount}
+              className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-red-700/70 bg-red-950/40 px-4 py-3 text-xs font-bold text-red-200 transition-colors hover:bg-red-900/60 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <Trash2 className="h-4 w-4" />
+              {deletingAccount ? 'Deleting Account…' : 'Permanently Delete My Account'}
+            </button>
+          </div>
         </div>
       )}
     </div>
