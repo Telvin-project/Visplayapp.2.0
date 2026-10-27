@@ -102,7 +102,31 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
   const [replyText, setReplyText] = useState('');
 
   // Unique session ID for analytics tracking
-  const [sessionId] = useState(() => `sess_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`);
+  const createViewSessionId = () => `sess_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const [sessionId, setSessionId] = useState(() => {
+    try {
+      const key = `visplay-view-session:${movie.id}`;
+      const existing = localStorage.getItem(key);
+      if (existing) return existing;
+      const created = createViewSessionId();
+      localStorage.setItem(key, created);
+      return created;
+    } catch {
+      return createViewSessionId();
+    }
+  });
+
+  useEffect(() => {
+    try {
+      const key = `visplay-view-session:${movie.id}`;
+      const existing = localStorage.getItem(key);
+      const next = existing || createViewSessionId();
+      localStorage.setItem(key, next);
+      setSessionId(next);
+    } catch {
+      setSessionId(createViewSessionId());
+    }
+  }, [movie.id]);
 
   // Max free preview allowed: exactly 300 seconds (5 minutes)
   const FREE_PREVIEW_LIMIT = 300;
@@ -279,6 +303,14 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
           completed,
         }),
       });
+      if (completed) {
+        // A completed viewing session is closed. Replaying from the beginning gets a fresh session.
+        const nextSessionId = createViewSessionId();
+        try {
+          localStorage.setItem(`visplay-view-session:${movie.id}`, nextSessionId);
+        } catch {}
+        setSessionId(nextSessionId);
+      }
     } catch (err) {
       // Background analytics fail quietly
     }
@@ -750,7 +782,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
           </div>
         )}
         {showControls && isPlaying && (
-          <div className="absolute inset-y-0 left-0 right-0 z-20 flex items-center justify-between px-3 sm:px-8 pointer-events-none">
+          <div className="absolute inset-0 z-20 flex items-center justify-center gap-12 sm:gap-16 pointer-events-none">
             <button type="button" onClick={(event) => { event.stopPropagation(); const video = videoRef.current; if (!video) return; const next = Math.max(0, video.currentTime - 10); video.currentTime = next; setCurrentTime(next); setGestureNotice('backward'); window.setTimeout(() => setGestureNotice(null), 1000); }} className="pointer-events-auto flex h-14 w-14 flex-col items-center justify-center rounded-full bg-black/45 text-white hover:bg-black/65" aria-label="Rewind 10 seconds"><RotateCcw className="h-6 w-6" /><span className="text-[10px]">10</span></button>
             <button type="button" onClick={(event) => { event.stopPropagation(); const video = videoRef.current; if (!video) return; const maxTime = movie.is_purchased ? duration : FREE_PREVIEW_LIMIT; const next = Math.min(maxTime, video.currentTime + 10); video.currentTime = next; setCurrentTime(next); if (!movie.is_purchased && next >= FREE_PREVIEW_LIMIT) setPaywallReached(true); setGestureNotice('forward'); window.setTimeout(() => setGestureNotice(null), 1000); }} className="pointer-events-auto flex h-14 w-14 flex-col items-center justify-center rounded-full bg-black/45 text-white hover:bg-black/65" aria-label="Forward 10 seconds"><RotateCw className="h-6 w-6" /><span className="text-[10px]">10</span></button>
           </div>
