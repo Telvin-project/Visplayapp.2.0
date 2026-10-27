@@ -262,7 +262,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                       className="w-full px-4 py-2 text-left hover:bg-slate-800/80 flex items-center gap-2 text-slate-200 transition-colors"
                     >
                       <Coins className="w-4 h-4 text-emerald-400" />
-                      <span>Deposit Coins (Paystack)</span>
+                      <span>Deposit Coins</span>
                     </button>
 
                     {/* Creator Studio / Creator Apply */}
