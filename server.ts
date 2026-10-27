@@ -31,6 +31,7 @@ import {
   Notification,
   SUPER_ADMIN_EMAILS,
   deleteSupabaseAuthUserByEmail,
+  verifySupabaseAccessToken,
 } from './server/db.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || (process.env.NODE_ENV === 'production' ? '' : 'visplay-super-secure-jwt-secret-nollywood-2026');
@@ -261,13 +262,26 @@ async function startServer() {
 
   // Supabase Auth Synchronization (Google OAuth & Supabase session sync)
   app.post('/api/auth/supabase-sync', async (req: Request, res: Response) => {
-    const { email, full_name, avatar_url } = req.body;
-    if (!email) {
-      res.status(400).json({ error: 'Email is required for Supabase authentication synchronization.' });
+    const accessToken = typeof req.body?.access_token === 'string' ? req.body.access_token : '';
+    if (!accessToken) {
+      res.status(401).json({ error: 'A valid Supabase session is required.' });
       return;
     }
 
-    const cleanEmail = email.toLowerCase().trim();
+    let verifiedSupabaseUser;
+    try {
+      verifiedSupabaseUser = await verifySupabaseAccessToken(accessToken);
+    } catch (verificationError) {
+      console.warn('Rejected unverified Supabase identity synchronization.');
+      res.status(401).json({ error: 'Your Google sign-in session could not be verified. Please sign in again.' });
+      return;
+    }
+
+    // Derive identity and profile fields only from the verified Supabase user, never from request claims.
+    const cleanEmail = verifiedSupabaseUser.email!.toLowerCase().trim();
+    const metadata = verifiedSupabaseUser.user_metadata || {};
+    const full_name = String(metadata.full_name || metadata.name || cleanEmail.split('@')[0]);
+    const avatar_url = String(metadata.avatar_url || metadata.picture || '');
     const db = loadDatabase();
     let user = db.users.find(u => u.email.toLowerCase() === cleanEmail);
     const isSuperAdmin = SUPER_ADMIN_EMAILS.some(e => e.toLowerCase() === cleanEmail);
