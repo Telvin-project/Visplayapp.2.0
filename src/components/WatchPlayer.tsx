@@ -613,7 +613,6 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
     const dx = touch.clientX - start.x;
     const dy = touch.clientY - start.y;
     const bounds = playerContainerRef.current.getBoundingClientRect();
-    const isLandscape = bounds.width > bounds.height;
 
     if (Math.abs(dy) > 35 && Math.abs(dy) > Math.abs(dx)) {
       const change = Math.min(0.25, Math.abs(dy) / Math.max(bounds.height, 1));
@@ -637,7 +636,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       const now = Date.now();
       const previous = lastTapRef.current;
       const tapX = touch.clientX - bounds.left;
-      if (previous && now - previous.at < 300 && Math.abs(tapX - previous.x) > 45) {
+      if (previous && now - previous.at < 300 && ((tapX < bounds.width / 2) === (previous.x < bounds.width / 2))) {
         const direction = tapX < bounds.width / 2 ? -10 : 10;
         const video = videoRef.current;
         if (video) {
