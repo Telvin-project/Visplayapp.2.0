@@ -26,6 +26,28 @@ interface CreatorStudioPageProps {
   onSelectMovie: (id: string) => void;
 }
 
+const readVideoDurationSeconds = (file: File): Promise<number> => new Promise((resolve, reject) => {
+  const objectUrl = URL.createObjectURL(file);
+  const probe = document.createElement('video');
+  const cleanup = () => {
+    probe.removeAttribute('src');
+    probe.load();
+    URL.revokeObjectURL(objectUrl);
+  };
+  probe.preload = 'metadata';
+  probe.onloadedmetadata = () => {
+    const seconds = Number.isFinite(probe.duration) ? Math.round(probe.duration) : 0;
+    cleanup();
+    if (seconds > 0) resolve(seconds);
+    else reject(new Error('Could not read the full movie duration from this video file.'));
+  };
+  probe.onerror = () => {
+    cleanup();
+    reject(new Error('Could not read this video file’s duration. Please try an MP4 video.'));
+  };
+  probe.src = objectUrl;
+});
+
 export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMovie }) => {
   const { user, creatorProfile, openCreatorApplyModal, loading: authLoading } = useAuth();
   const [channelData, setChannelData] = useState<any>(null);
@@ -164,6 +186,7 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
     try {
       let videoUrl = '';
       let posterUrl = '';
+      const uploadedDurationSeconds = videoFile ? await readVideoDurationSeconds(videoFile) : 0;
 
       const uploadDirectlyToStorage = async (
         file: File,
