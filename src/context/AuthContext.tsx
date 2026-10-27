@@ -91,8 +91,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
-  const syncSupabaseSession = useCallback(async (supabaseUser: any) => {
-    if (!supabaseUser?.email) return;
+  const syncSupabaseSession = useCallback(async (supabaseUser: any, accessToken: string) => {
+    if (!supabaseUser?.email || !accessToken) return;
     try {
       setAuthLoading(true);
       const res = await fetch('/api/auth/supabase-sync', {
@@ -100,16 +100,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          email: supabaseUser.email,
-          full_name:
-            supabaseUser.user_metadata?.full_name ||
-            supabaseUser.user_metadata?.name ||
-            supabaseUser.email.split('@')[0],
-          avatar_url:
-            supabaseUser.user_metadata?.avatar_url ||
-            supabaseUser.user_metadata?.picture ||
-            '',
-          supabase_id: supabaseUser.id,
+          // The server verifies this token with Supabase Auth before trusting the identity.
+          access_token: accessToken,
         }),
       });
 
@@ -140,13 +132,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (client) {
       client.auth.getSession().then(({ data: { session } }) => {
         if (session?.user) {
-          syncSupabaseSession(session.user);
+          syncSupabaseSession(session.user, session.access_token);
         }
       });
 
       const { data: { subscription } } = client.auth.onAuthStateChange(async (event, session) => {
         if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') && session?.user) {
-          await syncSupabaseSession(session.user);
+          await syncSupabaseSession(session.user, session.access_token);
         } else if (event === 'SIGNED_OUT') {
           setUser(null);
           setCreatorProfile(null);
