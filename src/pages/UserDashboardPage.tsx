@@ -30,7 +30,7 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
   onSelectBundle,
 }) => {
   const { user, updateProfile, openDepositModal, refreshUser, openCreatorApplyModal, creatorProfile, openAuthModal, logout } = useAuth();
-  const [activeTab, setActiveTab] = useState<'library' | 'history' | 'wallet' | 'creators' | 'notifications' | 'profile'>('library');
+  const [activeTab, setActiveTab] = useState<'library' | 'history' | 'wallet' | 'creators' | 'notifications' | 'profile'>(() => new URLSearchParams(window.location.search).get('account-deletion') === '1' ? 'profile' : 'library');
   const [libraryData, setLibraryData] = useState<any>(null);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
