@@ -64,6 +64,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
   const playerContainerRef = useRef<HTMLDivElement>(null);
   const lastTrackedSecondRef = useRef(0);
   const resumePositionRef = useRef(0);
+  const hasPendingPaymentResumeRef = useRef(false);
   const lastTapRef = useRef<{ at: number; x: number } | null>(null);
   const tapTimeoutRef = useRef<number | null>(null);
   const lastTouchAtRef = useRef(0);
@@ -223,11 +224,22 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
     resumePositionRef.current = 0;
     lastTrackedSecondRef.current = 0;
     const localKey = `visplay-position:${user?.id || 'guest'}:${movie.id}`;
-    try { resumePositionRef.current = Math.max(0, Number(localStorage.getItem(localKey)) || 0); } catch { /* Optional resume cache. */ }
+    const paymentResumeKey = `visplay-resume-after-payment:${user?.id || 'guest'}:${movie.id}`;
+    hasPendingPaymentResumeRef.current = false;
+    try {
+      const paymentResume = Number(localStorage.getItem(paymentResumeKey)) || 0;
+      if (paymentResume > 0) {
+        resumePositionRef.current = paymentResume;
+        hasPendingPaymentResumeRef.current = true;
+      } else {
+        resumePositionRef.current = Math.max(0, Number(localStorage.getItem(localKey)) || 0);
+      }
+    } catch { /* Optional resume cache. */ }
     if (user) {
       fetch('/api/user/library').then(response => response.ok ? response.json() : null).then(data => {
         const item = data?.watch_history?.find((entry: any) => entry.id === movie.id);
-        if (!item) return;
+        // A verified movie payment's saved resume point takes precedence over older watch history.
+        if (!item || hasPendingPaymentResumeRef.current) return;
         const position = Math.max(0, Number(item.last_position_seconds) || 0);
         resumePositionRef.current = position;
         try { localStorage.setItem(localKey, String(position)); } catch { /* Optional resume cache. */ }
@@ -776,6 +788,10 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
                 const safePosition = movie.is_purchased ? Math.min(savedPosition, Math.max(0, videoRef.current.duration - 1)) : Math.min(savedPosition, FREE_PREVIEW_LIMIT);
                 videoRef.current.currentTime = safePosition;
                 setCurrentTime(safePosition);
+                if (hasPendingPaymentResumeRef.current) {
+                  try { localStorage.removeItem(`visplay-resume-after-payment:${user?.id || 'guest'}:${movie.id}`); } catch { /* Optional cache cleanup. */ }
+                  hasPendingPaymentResumeRef.current = false;
+                }
                 if (!movie.is_purchased && savedPosition >= FREE_PREVIEW_LIMIT) {
                   videoRef.current.pause();
                   setIsPlaying(false);
