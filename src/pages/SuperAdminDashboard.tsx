@@ -141,26 +141,6 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onSele
     }
   };
 
-  const handleProcessPayout = async (creatorId: string) => {
-    try {
-      const res = await fetch('/api/admin/payouts/process', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ creator_id: creatorId, month_period: 'October 2026' }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        confetti({ particleCount: 50, spread: 60 });
-        setActionSuccess(data.message || 'Payout request recorded. No bank transfer was made.');
-        setTimeout(() => setActionSuccess(null), 3500);
-        fetchAdminData();
-      } else {
-        alert(data.error || 'Failed to process payout');
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  };
 
   const handleDeleteMovie = async (movie: any) => {
     const reason = window.prompt(`Remove "${movie.title}" from VisPlay? Enter the moderation reason (optional):`);
@@ -632,7 +612,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onSele
                   <th className="py-3 px-3">Creator Channel</th>
                   <th className="py-3 px-3">Gross Earnings</th>
                   <th className="py-3 px-3">15% Fee</th>
-                  <th className="py-3 px-3 text-emerald-300">Net Disbursed</th>
+                  <th className="py-3 px-3 text-emerald-300">Net Payout Amount</th>
                   <th className="py-3 px-3">Status</th>
                   <th className="py-3 px-3">Bank Details</th>
                 </tr>
