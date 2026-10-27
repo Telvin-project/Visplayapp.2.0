@@ -62,7 +62,10 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
   const lastTrackedSecondRef = useRef(0);
   const resumePositionRef = useRef(0);
   const lastTapRef = useRef<{ at: number; x: number } | null>(null);
+  const touchStartRef = useRef<{ x: number; y: number; at: number } | null>(null);
   const [fitScreen, setFitScreen] = useState(false);
+  const [brightness, setBrightness] = useState(1);
+  const [gestureNotice, setGestureNotice] = useState<string | null>(null);
 
   // Playback state
   const [isPlaying, setIsPlaying] = useState(false);
@@ -597,6 +600,63 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
     }
   };
 
+  // Mobile player gestures: double-tap either side to seek, vertical swipe to adjust volume/brightness.
+  const handlePlayerTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
+    const touch = event.touches[0];
+    if (touch) touchStartRef.current = { x: touch.clientX, y: touch.clientY, at: Date.now() };
+  };
+
+  const handlePlayerTouchEnd = (event: React.TouchEvent<HTMLDivElement>) => {
+    const touch = event.changedTouches[0];
+    const start = touchStartRef.current;
+    if (!touch || !start || !playerContainerRef.current) return;
+    const dx = touch.clientX - start.x;
+    const dy = touch.clientY - start.y;
+    const bounds = playerContainerRef.current.getBoundingClientRect();
+
+    if (Math.abs(dy) > 35 && Math.abs(dy) > Math.abs(dx)) {
+      const change = Math.min(0.25, Math.abs(dy) / Math.max(bounds.height, 1));
+      if (start.x < bounds.left + bounds.width / 2) {
+        setBrightness(value => Math.max(0.35, Math.min(1, value + (dy < 0 ? change : -change))));
+        setGestureNotice('Brightness');
+      } else {
+        const nextVolume = Math.max(0, Math.min(1, volume + (dy < 0 ? change * 2 : -change * 2)));
+        setVolume(nextVolume);
+        setIsMuted(nextVolume === 0);
+        if (videoRef.current) { videoRef.current.volume = nextVolume; videoRef.current.muted = nextVolume === 0; }
+        setGestureNotice('Volume');
+      }
+      setShowControls(true);
+      window.setTimeout(() => setGestureNotice(null), 900);
+      touchStartRef.current = null;
+      return;
+    }
+
+    if (Math.abs(dx) < 25 && Math.abs(dy) < 25) {
+      const now = Date.now();
+      const previous = lastTapRef.current;
+      const tapX = touch.clientX - bounds.left;
+      if (previous && now - previous.at < 300 && ((tapX < bounds.width / 2) === (previous.x < bounds.width / 2))) {
+        const direction = tapX < bounds.width / 2 ? -10 : 10;
+        const video = videoRef.current;
+        if (video) {
+          const maxTime = movie.is_purchased ? duration : FREE_PREVIEW_LIMIT;
+          const next = Math.max(0, Math.min(maxTime, video.currentTime + direction));
+          video.currentTime = next;
+          setCurrentTime(next);
+          if (!movie.is_purchased && next >= FREE_PREVIEW_LIMIT) setPaywallReached(true);
+          setGestureNotice(direction < 0 ? '−10 seconds' : '+10 seconds');
+          window.setTimeout(() => setGestureNotice(null), 900);
+        }
+        lastTapRef.current = null;
+      } else {
+        lastTapRef.current = { at: now, x: tapX };
+        setShowControls(true);
+      }
+    }
+    touchStartRef.current = null;
+  };
+
   const formatTime = (secs: number) => {
     const mins = Math.floor(secs / 60);
     const remSecs = Math.floor(secs % 60);
@@ -614,12 +674,15 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
           if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
           controlsTimeoutRef.current = setTimeout(() => setShowControls(false), 3500);
         }}
+        onTouchStart={handlePlayerTouchStart}
+        onTouchEnd={handlePlayerTouchEnd}
       >
         <video
           ref={videoRef}
           src={resolveMediaUrl(movie.video_url)}
           poster={resolveMediaUrl(movie.poster_url) || resolveMediaUrl(movie.backdrop_url)}
-          className="block w-full h-full object-contain cursor-default"
+          className={`block w-full h-full ${fitScreen ? 'object-cover' : 'object-contain'} cursor-default`}
+          style={{ filter: `brightness(${brightness})` }}
           playsInline
           width={1280}
           height={720}
@@ -669,6 +732,12 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
           >
             {isPlaying ? <Pause className="w-5 h-5 sm:w-6 sm:h-6" /> : <Play className="w-5 h-5 sm:w-6 sm:h-6 ml-0.5" />}
           </button>
+        )}
+
+        {gestureNotice && (
+          <div className="absolute left-1/2 top-1/2 z-40 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/20 bg-black/75 px-5 py-3 text-sm font-semibold text-white shadow-xl pointer-events-none">
+            {gestureNotice}
+          </div>
         )}
 
         {videoLoadError && (
@@ -841,8 +910,17 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
                 </div>
               </div>
 
-              {/* Right Controls: PiP & Fullscreen */}
+              {/* Right Controls: fit/crop, PiP & fullscreen */}
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setFitScreen(value => !value)}
+                  className={`p-2 rounded-lg border text-slate-300 hover:text-white transition-colors ${fitScreen ? 'border-cyan-400/60 bg-cyan-500/15 text-cyan-300' : 'border-transparent hover:bg-white/10'}`}
+                  title={fitScreen ? 'Fit entire video' : 'Fill screen (crop edges)'}
+                  aria-label={fitScreen ? 'Fit video to screen' : 'Fill screen'}
+                >
+                  <Scan className="w-4 h-4" />
+                </button>
                 {isPiPSupported && (
                   <button
                     onClick={togglePiP}
@@ -905,11 +983,21 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
             </button>
 
             <button
-              onClick={handleShareMovie}
-              className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-white transition-colors"
-              title="Share movie"
+              onClick={handleToggleSaved}
+              className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold border transition-all ${isSaved ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300' : 'bg-slate-900 border-slate-800 text-slate-300 hover:text-white'}`}
+              title={isSaved ? 'Remove from saved movies' : 'Save movie'}
+              aria-label={isSaved ? 'Remove from saved movies' : 'Save movie'}
             >
-              <Share2 className="w-4 h-4" />
+              <Bookmark className={`w-4 h-4 ${isSaved ? 'fill-cyan-400' : ''}`} />
+              <span className="hidden sm:inline">{isSaved ? 'Saved' : 'Save'}</span>
+            </button>
+            <button
+              onClick={handleShareMovie}
+              className="flex items-center justify-center w-11 h-11 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-cyan-300 hover:border-cyan-500/40 transition-colors"
+              title="Share movie"
+              aria-label="Share movie"
+            >
+              <Share2 className="w-5 h-5" />
             </button>
           </div>
         </div>
@@ -969,10 +1057,14 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
 
       {/* ---------------- COMMENTS & COMMUNITY DISCUSSION ---------------- */}
       <div className="bg-[#0d121d] border border-slate-800/80 rounded-3xl p-6 md:p-8 space-y-6">
-        <h3 className="text-base font-bold text-white flex items-center gap-2">
-          <span>Audience Discussion</span>
-          <span className="text-xs text-slate-400 font-mono">({comments.length})</span>
-        </h3>
+        <div className="flex items-center gap-6 border-b border-slate-800 pb-3">
+          <h3 className="relative text-base font-bold text-white flex items-center gap-2 after:absolute after:-bottom-[13px] after:left-0 after:right-0 after:h-0.5 after:bg-cyan-400">
+            <MessageCircle className="w-4 h-4 text-cyan-300" />
+            <span>Comments</span>
+            <span className="text-xs text-slate-400 font-mono">({comments.length})</span>
+          </h3>
+          <span className="text-sm text-slate-400">For you</span>
+        </div>
 
         {/* Comment input form */}
         <form onSubmit={handlePostComment} className="flex gap-3">
