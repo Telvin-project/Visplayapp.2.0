@@ -9,6 +9,7 @@ import {
   Maximize,
   Minimize,
   PictureInPicture2,
+  Scan,
   Lock,
   Unlock,
   Coins,
@@ -738,7 +739,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       {/* ---------------- PLAYER CONTAINER ---------------- */}
       <div
         ref={playerContainerRef}
-        className={`visplay-player ${isFullscreen ? 'fixed inset-0 z-[100]' : 'sticky top-16 z-30 w-full max-w-none rounded-none'} aspect-video bg-black overflow-hidden shadow-2xl border-y border-slate-800/80 group select-none`}
+        className={`visplay-player ${isFullscreen ? 'fixed inset-0 z-[100] h-[100dvh] w-screen max-w-none rounded-none aspect-auto border-0' : 'sticky top-16 z-30 w-full max-w-none rounded-none aspect-video border-y'} bg-black overflow-hidden shadow-2xl group select-none`}
         onMouseMove={() => {
           setShowControls(true);
           if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
@@ -823,7 +824,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
           </div>
         )}
         {showControls && isPlaying && (
-          <div className="absolute inset-0 z-20 flex items-center justify-center gap-12 sm:gap-16 pointer-events-none">
+          <div className="absolute inset-0 z-20 flex items-center justify-center gap-20 sm:gap-28 pointer-events-none">
             <button type="button" onClick={(event) => { event.stopPropagation(); const video = videoRef.current; if (!video) return; const next = Math.max(0, video.currentTime - 10); video.currentTime = next; setCurrentTime(next); setGestureNotice('backward'); window.setTimeout(() => setGestureNotice(null), 1000); }} className="pointer-events-auto flex h-14 w-14 flex-col items-center justify-center rounded-full bg-black/45 text-white hover:bg-black/65" aria-label="Rewind 10 seconds"><RotateCcw className="h-6 w-6" /><span className="text-[10px]">10</span></button>
             <button type="button" onClick={(event) => { event.stopPropagation(); const video = videoRef.current; if (!video) return; const maxTime = movie.is_purchased ? duration : FREE_PREVIEW_LIMIT; const next = Math.min(maxTime, video.currentTime + 10); video.currentTime = next; setCurrentTime(next); if (!movie.is_purchased && next >= FREE_PREVIEW_LIMIT) setPaywallReached(true); setGestureNotice('forward'); window.setTimeout(() => setGestureNotice(null), 1000); }} className="pointer-events-auto flex h-14 w-14 flex-col items-center justify-center rounded-full bg-black/45 text-white hover:bg-black/65" aria-label="Forward 10 seconds"><RotateCw className="h-6 w-6" /><span className="text-[10px]">10</span></button>
           </div>
@@ -999,8 +1000,18 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
                 </div>
               </div>
 
-              {/* Right Controls: fit/crop, PiP & fullscreen */}
+              {/* Right Controls: fit/fill, PiP & fullscreen */}
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setFitScreen(value => !value)}
+                  className={`p-2 rounded-lg transition-colors ${fitScreen ? 'text-cyan-300 bg-cyan-950/60' : 'text-slate-300 hover:text-white hover:bg-white/10'}`}
+                  title={fitScreen ? 'Fit whole picture (show black bars if needed)' : 'Fill screen (may crop picture edges)'}
+                  aria-label={fitScreen ? 'Fit whole picture' : 'Fill screen'}
+                  aria-pressed={fitScreen}
+                >
+                  <Scan className="w-4 h-4" />
+                </button>
                 {isPiPSupported && (
                   <button
                     onClick={togglePiP}
