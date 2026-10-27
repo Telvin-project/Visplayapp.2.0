@@ -495,7 +495,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
         await onRefreshMovie();
         return;
       }
-      if (!checkout.authorization_url) throw new Error('Paystack did not return a checkout link. Please try again.');
+      if (!checkout.authorization_url) throw new Error('Secure checkout could not be started. Please try again.');
       // Persist the exact stop point before leaving for Paystack.
       try {
         localStorage.setItem(`visplay-position:${user.id}:${movie.id}`, String(Math.max(currentTime, FREE_PREVIEW_LIMIT)));
@@ -909,7 +909,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
                   className="w-full py-2 px-3 rounded-xl text-[11px] font-semibold bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 transition-colors flex items-center justify-center gap-2"
                 >
                   <Coins className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>Deposit Coins via Paystack</span>
+                  <span>Add Coins</span>
                 </button>
               </div>
             </div>

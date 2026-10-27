@@ -141,26 +141,6 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onSele
     }
   };
 
-  const handleProcessPayout = async (creatorId: string) => {
-    try {
-      const res = await fetch('/api/admin/payouts/process', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ creator_id: creatorId, month_period: 'October 2026' }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        confetti({ particleCount: 50, spread: 60 });
-        setActionSuccess(data.message || 'Disbursed payout!');
-        setTimeout(() => setActionSuccess(null), 3500);
-        fetchAdminData();
-      } else {
-        alert(data.error || 'Failed to process payout');
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  };
 
   const handleDeleteMovie = async (movie: any) => {
     const reason = window.prompt(`Remove "${movie.title}" from VisPlay? Enter the moderation reason (optional):`);
@@ -619,37 +599,9 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onSele
       {/* ---------------- TAB 6: CREATOR MONTHLY PAYOUTS ---------------- */}
       {activeTab === 'payouts' && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-base font-bold text-white">Monthly Creator Disbursements</h3>
-            <span className="text-xs text-slate-400">85% Net Disbursal Rule</span>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="p-5 bg-[#0d121d] border border-slate-800 rounded-2xl space-y-3">
-              <h4 className="text-sm font-bold text-white">Disburse to Kunle Afolayan (Golden Effects)</h4>
-              <p className="text-xs text-slate-400">
-                Calculates accrued 85% net earnings from all movie and bundle unlocks.
-              </p>
-              <button
-                onClick={() => handleProcessPayout('creator_01')}
-                className="py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all"
-              >
-                Disburse Monthly Payout to Kunle Afolayan
-              </button>
-            </div>
-
-            <div className="p-5 bg-[#0d121d] border border-slate-800 rounded-2xl space-y-3">
-              <h4 className="text-sm font-bold text-white">Disburse to Nneka Adebayo (Heritage Screenworks)</h4>
-              <p className="text-xs text-slate-400">
-                Calculates accrued 85% net earnings from all movie and bundle unlocks.
-              </p>
-              <button
-                onClick={() => handleProcessPayout('creator_02')}
-                className="py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all"
-              >
-                Disburse Monthly Payout to Nneka Adebayo
-              </button>
-            </div>
+          <div>
+            <h3 className="text-base font-bold text-white">Creator Payout Records</h3>
+            <p className="mt-2 text-xs text-amber-200/90">Payout records do not initiate bank transfers. Only mark a payout as paid after the transfer has been completed and independently confirmed.</p>
           </div>
 
           <div className="overflow-x-auto bg-[#0d121d] border border-slate-800 rounded-2xl mt-4">
@@ -660,7 +612,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onSele
                   <th className="py-3 px-3">Creator Channel</th>
                   <th className="py-3 px-3">Gross Earnings</th>
                   <th className="py-3 px-3">15% Fee</th>
-                  <th className="py-3 px-3 text-emerald-300">Net Disbursed</th>
+                  <th className="py-3 px-3 text-emerald-300">Net Payout Amount</th>
                   <th className="py-3 px-3">Status</th>
                   <th className="py-3 px-3">Bank Details</th>
                 </tr>

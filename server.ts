@@ -241,8 +241,22 @@ async function startServer() {
       return;
     }
 
+    const normalizedEmail = String(email).trim().toLowerCase();
+    // Block legacy demo credentials even if an old database snapshot still contains
+    // the seeded demo accounts. Production access must use real account credentials.
+    const legacyDemoCredentials = [
+      ['viewer@visplay.ng', 'viewer123'],
+      ['kunle@nollywood.ng', 'creator123'],
+      ['talk2visibyl@gmail.com', 'admin123'],
+      ['usitakatelvin@gmail.com', 'admin123'],
+    ];
+    if (legacyDemoCredentials.some(([demoEmail, demoPassword]) => normalizedEmail === demoEmail && password === demoPassword)) {
+      res.status(401).json({ error: 'These legacy demo credentials are disabled. Please sign in with your own account.' });
+      return;
+    }
+
     const db = loadDatabase();
-    const user = db.users.find(u => u.email.toLowerCase() === email.toLowerCase());
+    const user = db.users.find(u => u.email.toLowerCase() === normalizedEmail);
     if (!user || !bcrypt.compareSync(password, user.password_hash)) {
       res.status(401).json({ error: 'Invalid email or password.' });
       return;
@@ -1457,7 +1471,7 @@ async function startServer() {
 
     const secretKey = process.env.PAYSTACK_SECRET_KEY;
     if (!secretKey) {
-      res.status(503).json({ error: 'Paystack is not configured yet. Add PAYSTACK_SECRET_KEY to the backend environment.' });
+      res.status(503).json({ error: 'Secure payments are temporarily unavailable. Please contact support.' });
       return;
     }
 
@@ -1482,7 +1496,7 @@ async function startServer() {
       const result = await response.json() as any;
       if (!response.ok || !result.status || !result.data?.authorization_url) {
         console.error('Paystack initialization failed:', result?.message || response.status);
-        res.status(502).json({ error: 'Paystack could not start checkout. Please try again.' });
+        res.status(502).json({ error: 'Secure checkout could not be started. Please try again.' });
         return;
       }
 
@@ -1504,7 +1518,7 @@ async function startServer() {
       res.json({ reference, authorization_url: result.data.authorization_url });
     } catch (error) {
       console.error('Paystack initialization error:', error);
-      res.status(502).json({ error: 'Unable to connect to Paystack. Please try again.' });
+      res.status(502).json({ error: 'Unable to connect to secure checkout. Please try again.' });
     }
   });
 
@@ -1517,7 +1531,7 @@ async function startServer() {
     }
     const secretKey = process.env.PAYSTACK_SECRET_KEY;
     if (!secretKey) {
-      res.status(503).json({ error: 'Paystack is not configured on the backend.' });
+      res.status(503).json({ error: 'Secure payments are temporarily unavailable. Please contact support.' });
       return;
     }
 
@@ -1540,7 +1554,7 @@ async function startServer() {
       const result = await response.json() as any;
       const payment = result?.data;
       if (!response.ok || !result?.status || payment?.status !== 'success') {
-        res.status(402).json({ error: 'Paystack has not confirmed a successful payment yet.' });
+        res.status(402).json({ error: 'Payment has not been confirmed yet. Please retry shortly.' });
         return;
       }
       if (payment.reference !== tx.reference || payment.currency !== 'NGN' || Number(payment.amount) !== tx.amount_ngn * 100 ||
@@ -1575,7 +1589,7 @@ async function startServer() {
       res.json({ success: true, wallet_balance: user.wallet_balance, transaction: latestTx });
     } catch (error) {
       console.error('Paystack verification error:', error);
-      res.status(502).json({ error: 'Could not verify payment with Paystack. Please retry shortly.' });
+      res.status(502).json({ error: 'Could not verify payment yet. Please retry shortly.' });
     }
   });
 
@@ -1602,7 +1616,7 @@ async function startServer() {
         }),
       });
       const result = await response.json() as any;
-      if (!response.ok || !result.status || !result.data?.authorization_url) return void res.status(502).json({ error: 'Paystack could not start movie checkout. Please try again.' });
+      if (!response.ok || !result.status || !result.data?.authorization_url) return void res.status(502).json({ error: 'Secure movie checkout could not be started. Please try again.' });
       db.transactions.push({
         id: `tx_${uuidv4().substring(0, 8)}`, user_id: req.user!.id, amount_ngn: price, type: 'purchase', status: 'pending',
         reference, payment_method: 'paystack', description: `Direct payment to unlock movie: "${movie.title}"`,
@@ -1613,7 +1627,7 @@ async function startServer() {
       res.json({ reference, authorization_url: result.data.authorization_url, movie_id: movie.id });
     } catch (error) {
       console.error('Paystack movie checkout initialization failed:', error);
-      res.status(502).json({ error: 'Unable to connect to Paystack. Please try again.' });
+      res.status(502).json({ error: 'Unable to connect to secure checkout. Please try again.' });
     }
   });
 
@@ -1621,7 +1635,7 @@ async function startServer() {
     const reference = String(req.body?.reference || '').trim();
     if (!reference) return void res.status(400).json({ error: 'Transaction reference is required.' });
     const secretKey = process.env.PAYSTACK_SECRET_KEY;
-    if (!secretKey) return void res.status(503).json({ error: 'Paystack is not configured on the backend.' });
+    if (!secretKey) return void res.status(503).json({ error: 'Secure payments are temporarily unavailable. Please contact support.' });
     const db = loadDatabase();
     const tx = db.transactions.find(t => t.reference === reference && t.user_id === req.user!.id && t.type === 'purchase' && t.metadata?.purpose === 'movie_purchase');
     if (!tx) return void res.status(404).json({ error: 'Movie payment record not found.' });
@@ -1639,7 +1653,7 @@ async function startServer() {
       const response = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, { headers: { Authorization: `Bearer ${secretKey}` } });
       const result = await response.json() as any;
       const payment = result?.data;
-      if (!response.ok || !result?.status || payment?.status !== 'success') return void res.status(402).json({ error: 'Paystack has not confirmed a successful movie payment yet.' });
+      if (!response.ok || !result?.status || payment?.status !== 'success') return void res.status(402).json({ error: 'Movie payment has not been confirmed yet. Please retry shortly.' });
       if (payment.reference !== tx.reference || payment.currency !== 'NGN' || Number(payment.amount) !== tx.amount_ngn * 100 ||
           (payment.metadata?.user_id && payment.metadata.user_id !== req.user!.id) ||
           (payment.metadata?.movie_id && payment.metadata.movie_id !== movie.id) ||
@@ -2271,18 +2285,24 @@ async function startServer() {
     res.json({ payouts });
   });
 
+  // This endpoint records a pending payout request only. It never claims a bank transfer happened.
   app.post('/api/admin/payouts/process', requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
     const { creator_id, month_period } = req.body;
     const db = loadDatabase();
-    const creator = db.creator_profiles.find(cp => cp.id === creator_id);
+    const creator = db.creator_profiles.find(cp => cp.id === creator_id && cp.status === 'approved');
     if (!creator) {
-      res.status(404).json({ error: 'Creator not found.' });
+      res.status(404).json({ error: 'Approved creator not found.' });
+      return;
+    }
+
+    if (db.payouts.some(p => p.creator_id === creator_id && p.status === 'pending')) {
+      res.status(409).json({ error: 'A pending payout request already exists for this creator.' });
       return;
     }
 
     const accruedLedger = db.ledger.filter(l => l.creator_id === creator_id && l.status === 'accrued');
     if (accruedLedger.length === 0) {
-      res.status(400).json({ error: 'No accrued earnings to disburse for this creator.' });
+      res.status(400).json({ error: 'No accrued earnings to request for this creator.' });
       return;
     }
 
@@ -2293,37 +2313,31 @@ async function startServer() {
     const payout: CreatorPayout = {
       id: `pay_${uuidv4().substring(0, 8)}`,
       creator_id,
-      month_period: month_period || 'Current Month',
+      month_period: typeof month_period === 'string' && month_period.trim() ? month_period.trim() : new Date().toLocaleDateString('en-NG', { month: 'long', year: 'numeric' }),
       total_earnings_ngn: grossTotal,
       platform_fee_ngn: platformFee,
       net_payout_ngn: netPayout,
-      status: 'paid',
-      bank_name: 'Zenith Bank PLC',
-      account_number: '2081234567',
-      account_name: creator.channel_name,
-      paid_at: new Date().toISOString(),
+      status: 'pending',
+      bank_name: '',
+      account_number: '',
+      account_name: '',
       created_at: new Date().toISOString(),
     };
 
     db.payouts.push(payout);
-    accruedLedger.forEach(l => {
-      l.status = 'paid';
-      l.payout_id = payout.id;
-    });
-
     db.audit_logs.push({
       id: `aud_${uuidv4().substring(0, 8)}`,
       admin_id: req.user!.id,
       admin_name: req.user!.full_name,
-      action: 'PROCESS_CREATOR_PAYOUT',
+      action: 'CREATE_PENDING_PAYOUT_REQUEST',
       target_type: 'payout',
       target_id: payout.id,
-      details: `Processed ₦${netPayout.toLocaleString()} net payout (85% of ₦${grossTotal.toLocaleString()}) to ${creator.channel_name}.`,
+      details: `Recorded a pending payout request for ₦${netPayout.toLocaleString()} to creator ${creator.channel_name}. No bank transfer was made.`,
       created_at: new Date().toISOString(),
     });
 
     await saveDatabase(db);
-    res.json({ success: true, payout, message: `Disbursed ₦${netPayout.toLocaleString()} to ${creator.channel_name}.` });
+    res.status(201).json({ success: true, payout, message: `Payout request recorded as pending for ${creator.channel_name}. No bank transfer was sent.` });
   });
 
   // -------------------------------------------------------------

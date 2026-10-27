@@ -71,7 +71,7 @@ export const WalletDepositModal: React.FC = () => {
       });
       const initData = await initRes.json();
       if (!initRes.ok || !initData.authorization_url) {
-        throw new Error(initData.error || 'Could not start Paystack checkout.');
+        throw new Error(initData.error || 'Could not start secure checkout.');
       }
       // Navigate to Paystack. The callback reference is verified when the user returns.
       window.location.assign(initData.authorization_url);
@@ -195,11 +195,11 @@ export const WalletDepositModal: React.FC = () => {
                 className="w-full py-3 px-4 rounded-xl font-semibold text-sm bg-gradient-to-r from-cyan-500 via-blue-600 to-fuchsia-600 hover:from-cyan-400 hover:to-fuchsia-500 text-white shadow-lg shadow-cyan-500/20 active:scale-[0.98] transition-all disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 {submitting ? (
-                  <span>Processing Paystack checkout...</span>
+                  <span>Connecting to secure checkout...</span>
                 ) : (
                   <>
                     <CreditCard className="w-4 h-4" />
-                    <span>Pay ₦{effectiveAmount.toLocaleString()} with Paystack</span>
+                    <span>Continue to secure payment</span>
                     <ArrowRight className="w-4 h-4 ml-auto" />
                   </>
                 )}
@@ -207,7 +207,7 @@ export const WalletDepositModal: React.FC = () => {
 
               <div className="flex items-center justify-center gap-2 text-[11px] text-slate-400">
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Secured with Paystack PCI-DSS 256-bit encryption</span>
+                <span>Secure payment processing</span>
               </div>
             </div>
           </>
