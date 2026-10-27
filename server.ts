@@ -1190,7 +1190,7 @@ async function startServer() {
         synopsis: synopsis.trim(),
         genre: genre.trim(),
         release_year: release_year ? parseInt(release_year, 10) : new Date().getFullYear(),
-        duration_seconds: 3600, // standard runtime estimation
+        duration_seconds: Math.max(1, Math.min(86400, Math.floor(Number(req.body.duration_seconds) || 3600))),
         poster_url: posterUrl,
         backdrop_url: posterUrl,
         video_url: videoUrl,
