@@ -21,6 +21,7 @@ const AppContent: React.FC = () => {
   const { user, openAuthModal, openCreatorApplyModal } = useAuth();
   const [currentView, setCurrentView] = useState<string>('home');
   const [selectedMovieId, setSelectedMovieId] = useState<string>('mov_lagos_syndicate');
+  const [moviePaymentRefresh, setMoviePaymentRefresh] = useState(0);
   const [selectedCreatorId, setSelectedCreatorId] = useState<string>('creator_01');
   const [selectedBundleId, setSelectedBundleId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -59,6 +60,7 @@ const AppContent: React.FC = () => {
       const movieId = (event as CustomEvent<{ movieId?: string }>).detail?.movieId;
       if (!movieId) return;
       setSelectedMovieId(movieId);
+      setMoviePaymentRefresh(version => version + 1);
       setCurrentView('watch');
       window.scrollTo({ top: 0, behavior: 'smooth' });
     };
@@ -166,6 +168,7 @@ const AppContent: React.FC = () => {
 
         {currentView === 'watch' && (
           <WatchPage
+            key={`${selectedMovieId}:${moviePaymentRefresh}`}
             movieId={selectedMovieId}
             onBack={() => setCurrentView('home')}
             onSelectMovie={handleSelectMovie}
