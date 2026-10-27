@@ -33,7 +33,10 @@ import {
   deleteSupabaseAuthUserByEmail,
 } from './server/db.js';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'visplay-super-secure-jwt-secret-nollywood-2026';
+const JWT_SECRET = process.env.JWT_SECRET || (process.env.NODE_ENV === 'production' ? '' : 'visplay-super-secure-jwt-secret-nollywood-2026');
+if (!JWT_SECRET) {
+  throw new Error('Missing JWT_SECRET; refusing to start with an insecure production signing key.');
+}
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const isProd = process.env.NODE_ENV === 'production';
 
@@ -379,7 +382,6 @@ async function startServer() {
     const ownedMovieIds = new Set(ownedMovies.map(movie => movie.id));
     const ownedBundles = creatorId ? db.bundles.filter(bundle => bundle.creator_id === creatorId) : [];
     const ownedBundleIds = new Set(ownedBundles.map(bundle => bundle.id));
-    const ownedContentIds = new Set([...ownedMovieIds, ...ownedBundleIds]);
 
     // Delete the external Auth identity first. If this fails, do not partially delete app data.
     try {
