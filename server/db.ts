@@ -270,6 +270,34 @@ function getSupabaseClient() {
   return supabaseClient;
 }
 
+/**
+ * Remove the matching Supabase Auth identity using the server-only service-role client.
+ * Returns false when the email has no Supabase Auth identity (e.g. a local-password account).
+ */
+export async function deleteSupabaseAuthUserByEmail(email: string): Promise<boolean> {
+  const client = getSupabaseClient();
+  if (!client) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('Supabase admin access is not configured; account deletion cannot be completed safely.');
+    }
+    return false;
+  }
+
+  const targetEmail = email.trim().toLowerCase();
+  for (let page = 1; page <= 100; page += 1) {
+    const { data, error } = await client.auth.admin.listUsers({ page, perPage: 1000 });
+    if (error) throw new Error('Could not verify the Supabase account for deletion: ' + error.message);
+    const match = data.users.find(user => user.email?.toLowerCase() === targetEmail);
+    if (match) {
+      const { error: deleteError } = await client.auth.admin.deleteUser(match.id);
+      if (deleteError) throw new Error('Could not delete the Supabase sign-in identity: ' + deleteError.message);
+      return true;
+    }
+    if (data.users.length < 1000) return false;
+  }
+  throw new Error('Could not safely locate the Supabase account for deletion.');
+}
+
 /** Load the complete application state before accepting requests. */
 export async function initializeDatabase(): Promise<void> {
   const client = getSupabaseClient();

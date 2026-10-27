@@ -30,9 +30,13 @@ import {
   AuditLog,
   Notification,
   SUPER_ADMIN_EMAILS,
+  deleteSupabaseAuthUserByEmail,
 } from './server/db.js';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'visplay-super-secure-jwt-secret-nollywood-2026';
+const JWT_SECRET = process.env.JWT_SECRET || (process.env.NODE_ENV === 'production' ? '' : 'visplay-super-secure-jwt-secret-nollywood-2026');
+if (!JWT_SECRET) {
+  throw new Error('Missing JWT_SECRET; refusing to start with an insecure production signing key.');
+}
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const isProd = process.env.NODE_ENV === 'production';
 
@@ -354,6 +358,131 @@ async function startServer() {
   app.post('/api/auth/logout', (req: Request, res: Response) => {
     res.clearCookie('visplay_token', { path: '/', secure: isProd, sameSite: 'lax' });
     res.json({ success: true, message: 'Logged out successfully.' });
+  });
+
+  // Account deletion: remove the user's account and personal/user-generated data.
+  // Financial records needed for accounting are retained only with the user identity anonymized.
+  app.delete('/api/auth/account', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    const db = loadDatabase();
+    const userIndex = db.users.findIndex(u => u.id === req.user!.id);
+    if (userIndex === -1) {
+      res.status(404).json({ error: 'Account not found.' });
+      return;
+    }
+
+    const user = db.users[userIndex];
+    if (user.role === 'admin' && db.users.filter(u => u.role === 'admin').length <= 1) {
+      res.status(409).json({ error: 'The last administrator account cannot be deleted. Assign another administrator first.' });
+      return;
+    }
+
+    const creatorProfile = db.creator_profiles.find(cp => cp.user_id === user.id);
+    const creatorId = creatorProfile?.id;
+    const ownedMovies = creatorId ? db.movies.filter(movie => movie.creator_id === creatorId) : [];
+    const ownedMovieIds = new Set(ownedMovies.map(movie => movie.id));
+    const ownedBundles = creatorId ? db.bundles.filter(bundle => bundle.creator_id === creatorId) : [];
+    const ownedBundleIds = new Set(ownedBundles.map(bundle => bundle.id));
+
+    // Delete the external Auth identity first. If this fails, do not partially delete app data.
+    try {
+      await deleteSupabaseAuthUserByEmail(user.email);
+    } catch (authDeleteError) {
+      console.error('Account deletion could not remove Supabase Auth identity:', authDeleteError);
+      res.status(503).json({ error: 'We could not securely finish deleting your sign-in account. No app data was deleted. Please try again later.' });
+      return;
+    }
+
+    // Remove creator-owned media from object storage where the public URLs map to this bucket.
+    try {
+      const publicBase = process.env.R2_PUBLIC_BASE_URL?.replace(/\/+$/, '');
+      const mediaUrls = [
+        ...ownedMovies.flatMap(movie => [movie.video_url, movie.poster_url, movie.backdrop_url]),
+        ...ownedBundles.map(bundle => bundle.poster_url),
+      ];
+      const objectKeys = mediaUrls
+        .filter((url): url is string => Boolean(publicBase && typeof url === 'string' && url.startsWith(publicBase + '/')))
+        .map(url => decodeURIComponent(url.slice(publicBase!.length + 1).split('?')[0]))
+        .filter(Boolean);
+      const uniqueKeys = [...new Set(objectKeys)];
+      if (uniqueKeys.length && isR2Configured()) {
+        await getR2Client().send(new DeleteObjectsCommand({ Bucket: MEDIA_BUCKET, Delete: { Objects: uniqueKeys.map(Key => ({ Key })) } }));
+      }
+    } catch (storageError) {
+      // Continue deletion to respect the user's request; log cleanup for operator follow-up.
+      console.error('Account deletion media cleanup failed:', storageError);
+    }
+
+    // Delete comments made by the account and replies that depend on those comments.
+    const removedCommentIds = new Set(db.comments
+      .filter(comment => comment.user_id === user.id || ownedMovieIds.has(comment.movie_id))
+      .map(comment => comment.id));
+    let expanded = true;
+    while (expanded) {
+      expanded = false;
+      for (const comment of db.comments) {
+        if (comment.parent_id && removedCommentIds.has(comment.parent_id) && !removedCommentIds.has(comment.id)) {
+          removedCommentIds.add(comment.id);
+          expanded = true;
+        }
+      }
+    }
+    db.comments = db.comments.filter(comment => !removedCommentIds.has(comment.id));
+    db.likes = db.likes.filter(like => like.user_id !== user.id && !ownedMovieIds.has(like.movie_id));
+    db.follows = db.follows.filter(follow =>
+      follow.follower_user_id !== user.id &&
+      follow.creator_user_id !== user.id &&
+      (!creatorId || follow.creator_user_id !== creatorId)
+    );
+    db.notifications = db.notifications.filter(notification => notification.user_id !== user.id);
+    db.viewing_events = db.viewing_events.filter(event =>
+      event.user_id !== user.id && !ownedMovieIds.has(event.movie_id)
+    );
+    db.rewards = db.rewards.filter(reward => reward.user_id !== user.id);
+    db.livestreams = db.livestreams.filter(stream => !creatorId || stream.creator_id !== creatorId);
+    db.premieres = db.premieres.filter(premiere => !ownedMovieIds.has(premiere.movie_id));
+    db.movies = db.movies.filter(movie => !ownedMovieIds.has(movie.id));
+    db.bundles = db.bundles.filter(bundle => !ownedBundleIds.has(bundle.id));
+    db.creator_profiles = db.creator_profiles.filter(profile => profile.user_id !== user.id && (!creatorId || profile.id !== creatorId));
+
+    if (db.featured_movie_id && ownedMovieIds.has(db.featured_movie_id)) {
+      db.featured_movie_id = null;
+      db.featured_movie_backdrop = null;
+    }
+
+    // Preserve financial/audit evidence without retaining a direct link to the deleted account.
+    const anonymizedUserId = `deleted_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
+    db.transactions.forEach(tx => {
+      if (tx.user_id === user.id) tx.user_id = anonymizedUserId;
+    });
+    db.purchases.forEach(purchase => {
+      if (purchase.user_id === user.id) purchase.user_id = anonymizedUserId;
+    });
+    db.payouts.forEach(payout => {
+      if (creatorId && payout.creator_id === creatorId) {
+        payout.account_name = 'Deleted account';
+        payout.account_number = '';
+        payout.bank_name = '';
+      }
+    });
+    db.audit_logs.forEach(log => {
+      if (log.admin_id === user.id) {
+        log.admin_id = anonymizedUserId;
+        log.admin_name = 'Deleted account';
+      }
+    });
+
+    // Remove profile and account records only after dependent data has been handled.
+    db.users.splice(userIndex, 1);
+    try {
+      await saveDatabase(db);
+    } catch (saveError) {
+      console.error('Failed to persist account deletion:', saveError);
+      res.status(500).json({ error: 'Your sign-in identity was removed, but we could not finish saving the account deletion. Please contact VisPlay support.' });
+      return;
+    }
+
+    res.clearCookie('visplay_token', { path: '/', secure: isProd, sameSite: 'lax' });
+    res.json({ success: true, message: 'Your VisPlay account and associated personal data have been deleted.' });
   });
 
   app.put('/api/auth/profile', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
