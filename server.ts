@@ -2285,18 +2285,19 @@ async function startServer() {
     res.json({ payouts });
   });
 
+  // This endpoint records a pending payout request only. It never claims a bank transfer happened.
   app.post('/api/admin/payouts/process', requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
     const { creator_id, month_period } = req.body;
     const db = loadDatabase();
-    const creator = db.creator_profiles.find(cp => cp.id === creator_id);
+    const creator = db.creator_profiles.find(cp => cp.id === creator_id && cp.status === 'approved');
     if (!creator) {
-      res.status(404).json({ error: 'Creator not found.' });
+      res.status(404).json({ error: 'Approved creator not found.' });
       return;
     }
 
     const accruedLedger = db.ledger.filter(l => l.creator_id === creator_id && l.status === 'accrued');
     if (accruedLedger.length === 0) {
-      res.status(400).json({ error: 'No accrued earnings to disburse for this creator.' });
+      res.status(400).json({ error: 'No accrued earnings to request for this creator.' });
       return;
     }
 
@@ -2307,37 +2308,31 @@ async function startServer() {
     const payout: CreatorPayout = {
       id: `pay_${uuidv4().substring(0, 8)}`,
       creator_id,
-      month_period: month_period || 'Current Month',
+      month_period: typeof month_period === 'string' && month_period.trim() ? month_period.trim() : new Date().toLocaleDateString('en-NG', { month: 'long', year: 'numeric' }),
       total_earnings_ngn: grossTotal,
       platform_fee_ngn: platformFee,
       net_payout_ngn: netPayout,
-      status: 'paid',
-      bank_name: 'Zenith Bank PLC',
-      account_number: '2081234567',
-      account_name: creator.channel_name,
-      paid_at: new Date().toISOString(),
+      status: 'pending',
+      bank_name: '',
+      account_number: '',
+      account_name: '',
       created_at: new Date().toISOString(),
     };
 
     db.payouts.push(payout);
-    accruedLedger.forEach(l => {
-      l.status = 'paid';
-      l.payout_id = payout.id;
-    });
-
     db.audit_logs.push({
       id: `aud_${uuidv4().substring(0, 8)}`,
       admin_id: req.user!.id,
       admin_name: req.user!.full_name,
-      action: 'PROCESS_CREATOR_PAYOUT',
+      action: 'CREATE_PENDING_PAYOUT_REQUEST',
       target_type: 'payout',
       target_id: payout.id,
-      details: `Processed ₦${netPayout.toLocaleString()} net payout (85% of ₦${grossTotal.toLocaleString()}) to ${creator.channel_name}.`,
+      details: `Recorded a pending payout request for ₦${netPayout.toLocaleString()} to creator ${creator.channel_name}. No bank transfer was made.`,
       created_at: new Date().toISOString(),
     });
 
     await saveDatabase(db);
-    res.json({ success: true, payout, message: `Disbursed ₦${netPayout.toLocaleString()} to ${creator.channel_name}.` });
+    res.status(201).json({ success: true, payout, message: `Payout request recorded as pending for ${creator.channel_name}. No bank transfer was sent.` });
   });
 
   // -------------------------------------------------------------
