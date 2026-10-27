@@ -14,6 +14,8 @@ import {
   Coins,
   Heart,
   Share2,
+  Bookmark,
+  Scan,
   AlertTriangle,
   Send,
   Trash2,
@@ -59,6 +61,8 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
   const playerContainerRef = useRef<HTMLDivElement>(null);
   const lastTrackedSecondRef = useRef(0);
   const resumePositionRef = useRef(0);
+  const lastTapRef = useRef<{ at: number; x: number } | null>(null);
+  const [fitScreen, setFitScreen] = useState(false);
 
   // Playback state
   const [isPlaying, setIsPlaying] = useState(false);
@@ -82,6 +86,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
   const [isLiked, setIsLiked] = useState(movie.is_liked || false);
   const [likesCount, setLikesCount] = useState(movie.likes_count || 0);
   const [isFollowing, setIsFollowing] = useState(false);
+  const [isSaved, setIsSaved] = useState(false);
   const [followersCount, setFollowersCount] = useState(0);
 
   // Comments state
@@ -96,6 +101,24 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
 
   // Max free preview allowed: exactly 300 seconds (5 minutes)
   const FREE_PREVIEW_LIMIT = 300;
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(`visplay-saved-movies:${user?.id || 'guest'}`) || '[]');
+      setIsSaved(Array.isArray(saved) && saved.includes(movie.id));
+    } catch { setIsSaved(false); }
+  }, [movie.id, user?.id]);
+
+  const handleToggleSaved = () => {
+    const key = `visplay-saved-movies:${user?.id || 'guest'}`;
+    try {
+      const saved = JSON.parse(localStorage.getItem(key) || '[]');
+      const current = Array.isArray(saved) ? saved.filter((id: string) => typeof id === 'string') : [];
+      const next = isSaved ? current.filter((id: string) => id !== movie.id) : [...new Set([...current, movie.id])];
+      localStorage.setItem(key, JSON.stringify(next));
+      setIsSaved(!isSaved);
+    } catch (error) { console.error('Could not update saved movies', error); }
+  };
 
   useEffect(() => {
     // Check Picture-in-Picture browser support
@@ -158,6 +181,8 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
     // Check creator follow status
     if (creator && user) {
       checkFollowStatus();
+    } else {
+      setIsFollowing(false);
     }
 
     setCurrentTime(0);
@@ -192,6 +217,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       if (res.ok) {
         const data = await res.json().catch(() => ({} as any));
         setFollowersCount(data.followers_count || 0);
+        setIsFollowing(Boolean(data.is_following));
       }
     } catch (e) {
       console.error(e);
