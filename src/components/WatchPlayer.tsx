@@ -885,7 +885,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
                 Unlock "{movie.title}"
               </h3>
               <p className="text-[11px] text-slate-300 mb-3">
-                Enjoyed the first 5 minutes? Unlock the complete film for only{' '}
+                The full movie is {formatTime(duration)} long. You’ve reached the end of the free 5-minute preview. Unlock to continue watching from 05:00 for only{' '}
                 <strong className="text-cyan-300 font-mono text-sm">₦100</strong>.
               </p>
 
@@ -941,9 +941,14 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
           {/* Top Bar inside player */}
           <div className="flex items-center justify-between pointer-events-auto">
             <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold text-white drop-shadow truncate max-w-xs sm:max-w-md">
-                {movie.title}
-              </span>
+              <div className="min-w-0">
+                <span className="block text-xs font-semibold text-white drop-shadow truncate max-w-xs sm:max-w-md">
+                  {movie.title}
+                </span>
+                <span className="block text-[10px] text-slate-300">
+                  Full movie runtime: {formatTime(duration)}
+                </span>
+              </div>
               {!movie.is_purchased && (
                 <span className="text-[10px] font-medium text-cyan-300 bg-cyan-950/80 border border-cyan-800 px-2 py-0.5 rounded-md">
                   Preview: 5m Limit
