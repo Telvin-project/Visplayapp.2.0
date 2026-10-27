@@ -569,6 +569,19 @@ async function startServer() {
       isFollowing = true;
     }
 
+    const targetProfile = db.creator_profiles.find((profile: any) => profile.id === targetCreatorId);
+    const creatorOwnerId = targetProfile?.user_id || targetProfile?.owner_user_id;
+    if (isFollowing && creatorOwnerId && creatorOwnerId !== req.user!.id) {
+      db.notifications.push({
+        id: `notif_${uuidv4().substring(0, 8)}`,
+        user_id: creatorOwnerId,
+        title: 'New follower',
+        message: `${req.user!.full_name || 'Someone'} started following your creator channel.`,
+        is_read: false,
+        created_at: new Date().toISOString(),
+      });
+    }
+
     await saveDatabase(db);
     const totalFollowers = db.follows.filter(f => f.creator_user_id === targetCreatorId).length;
     res.json({ is_following: isFollowing, followers_count: totalFollowers });
@@ -1070,6 +1083,21 @@ async function startServer() {
       isLiked = true;
     }
 
+    const movie = db.movies.find((item: any) => item.id === movieId);
+    const creatorProfile = movie ? db.creator_profiles.find((profile: any) => profile.id === movie.creator_id) : null;
+    const creatorOwnerId = (creatorProfile as any)?.user_id || (creatorProfile as any)?.owner_user_id;
+    if (isLiked && creatorOwnerId && creatorOwnerId !== req.user!.id) {
+      db.notifications.push({
+        id: `notif_${uuidv4().substring(0, 8)}`,
+        user_id: creatorOwnerId,
+        title: 'Someone liked your movie',
+        message: `${req.user!.full_name || 'Someone'} liked "${movie?.title || 'your movie'}".`,
+        link: `/?watch=${encodeURIComponent(movieId)}`,
+        is_read: false,
+        created_at: new Date().toISOString(),
+      });
+    }
+
     await saveDatabase(db);
     const totalLikes = db.likes.filter(l => l.movie_id === movieId).length;
     res.json({ is_liked: isLiked, likes_count: totalLikes });
@@ -1105,6 +1133,28 @@ async function startServer() {
     };
 
     db.comments.push(newComment);
+
+    const movie = db.movies.find((item: any) => item.id === req.params.id);
+    const creatorProfile = movie ? db.creator_profiles.find((profile: any) => profile.id === movie.creator_id) : null;
+    const creatorOwnerId = (creatorProfile as any)?.user_id || (creatorProfile as any)?.owner_user_id;
+    const notifyTargets = new Set<string>();
+    if (creatorOwnerId && creatorOwnerId !== req.user!.id) notifyTargets.add(creatorOwnerId);
+    if (parent_id) {
+      const parentComment = db.comments.find((item: any) => item.id === parent_id);
+      if (parentComment?.user_id && parentComment.user_id !== req.user!.id) notifyTargets.add(parentComment.user_id);
+    }
+    notifyTargets.forEach(user_id => {
+      db.notifications.push({
+        id: `notif_${uuidv4().substring(0, 8)}`,
+        user_id,
+        title: parent_id ? 'New reply to your comment' : 'New comment on your movie',
+        message: parent_id ? `${req.user!.full_name || 'Someone'} replied to a comment.` : `${req.user!.full_name || 'Someone'} commented on "${movie?.title || 'your movie'}".`,
+        link: `/?watch=${encodeURIComponent(req.params.id)}`,
+        is_read: false,
+        created_at: new Date().toISOString(),
+      });
+    });
+
     await saveDatabase(db);
     res.status(201).json({ comment: newComment });
   });
@@ -1132,6 +1182,17 @@ async function startServer() {
     }
     comment.likes_count = Math.max(0, previousLikes + (reaction === 'like' ? (wasSelected ? -1 : 1) : (hadLike ? -1 : 0)));
     extended.dislikes_count = Math.max(0, previousDislikes + (reaction === 'dislike' ? (wasSelected ? -1 : 1) : (hadDislike ? -1 : 0)));
+    if (reaction === 'like' && !wasSelected && comment.user_id !== req.user!.id) {
+      db.notifications.push({
+        id: `notif_${uuidv4().substring(0, 8)}`,
+        user_id: comment.user_id,
+        title: 'Someone liked your comment',
+        message: `${req.user!.full_name || 'Someone'} liked your comment.`,
+        link: `/?watch=${encodeURIComponent(req.params.id)}`,
+        is_read: false,
+        created_at: new Date().toISOString(),
+      });
+    }
     await saveDatabase(db);
     res.json({
       likes_count: comment.likes_count,
