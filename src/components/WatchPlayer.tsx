@@ -976,17 +976,18 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
               <input
                 type="range"
                 min={0}
-                max={movie.is_purchased ? duration : FREE_PREVIEW_LIMIT}
+                max={duration}
                 step={0.5}
                 value={currentTime}
                 onChange={handleSeek}
                 className="w-full h-1.5 bg-slate-700/80 rounded-lg appearance-none cursor-pointer accent-cyan-400 hover:h-2.5 transition-all"
               />
-              {/* 5-minute visual marker if unpaid */}
-              {!movie.is_purchased && (
+              {/* Show the actual movie timeline; mark where the free preview ends. */}
+              {!movie.is_purchased && duration > FREE_PREVIEW_LIMIT && (
                 <div
-                  className="absolute right-0 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-cyan-400 ring-2 ring-cyan-500/50"
-                  title="5-minute preview limit"
+                  className="absolute top-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-cyan-400 ring-2 ring-cyan-500/50 pointer-events-none"
+                  style={{ left: `${Math.min(100, (FREE_PREVIEW_LIMIT / duration) * 100)}%` }}
+                  title="Free preview ends at 5:00"
                 />
               )}
             </div>
@@ -1019,7 +1020,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
                 <div className="text-[11px] text-slate-300 font-mono">
                   <span>{formatTime(currentTime)}</span>
                   <span className="mx-1">/</span>
-                  <span>{formatTime(movie.is_purchased ? duration : FREE_PREVIEW_LIMIT)}</span>
+                  <span>{formatTime(duration)}</span>
                 </div>
               </div>
 
