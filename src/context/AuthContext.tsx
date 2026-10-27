@@ -158,7 +158,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setAuthLoading(false);
         return {
           success: false,
-          error: 'Supabase credentials not configured. Please enter your Supabase URL & Anon Key below, or use demo one-click login.',
+          error: 'Google sign-in is temporarily unavailable because authentication is not configured. Please contact support.',
         };
       }
 
