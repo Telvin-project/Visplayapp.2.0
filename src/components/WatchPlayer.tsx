@@ -15,7 +15,9 @@ import {
   Heart,
   Share2,
   Bookmark,
-  Scan,
+  RotateCcw,
+  RotateCw,
+  Sun,
   AlertTriangle,
   Send,
   Trash2,
@@ -65,7 +67,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
   const touchStartRef = useRef<{ x: number; y: number; at: number } | null>(null);
   const [fitScreen, setFitScreen] = useState(false);
   const [brightness, setBrightness] = useState(1);
-  const [gestureNotice, setGestureNotice] = useState<string | null>(null);
+  const [gestureNotice, setGestureNotice] = useState<'brightness' | 'volume' | 'backward' | 'forward' | null>(null);
 
   // Playback state
   const [isPlaying, setIsPlaying] = useState(false);
@@ -110,7 +112,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       const saved = JSON.parse(localStorage.getItem(`visplay-saved-movies:${user?.id || 'guest'}`) || '[]');
       setIsSaved(Array.isArray(saved) && saved.includes(movie.id));
     } catch { setIsSaved(false); }
-  }, [movie.id, user?.id]);
+  }, [movie.id, user?.id, creator?.id]);
 
   const handleToggleSaved = () => {
     const key = `visplay-saved-movies:${user?.id || 'guest'}`;
@@ -618,13 +620,13 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       const change = Math.min(0.25, Math.abs(dy) / Math.max(bounds.height, 1));
       if (start.x < bounds.left + bounds.width / 2) {
         setBrightness(value => Math.max(0.35, Math.min(1, value + (dy < 0 ? change : -change))));
-        setGestureNotice('Brightness');
+        setGestureNotice('brightness');
       } else {
         const nextVolume = Math.max(0, Math.min(1, volume + (dy < 0 ? change * 2 : -change * 2)));
         setVolume(nextVolume);
         setIsMuted(nextVolume === 0);
         if (videoRef.current) { videoRef.current.volume = nextVolume; videoRef.current.muted = nextVolume === 0; }
-        setGestureNotice('Volume');
+        setGestureNotice('volume');
       }
       setShowControls(true);
       window.setTimeout(() => setGestureNotice(null), 900);
@@ -645,7 +647,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
           video.currentTime = next;
           setCurrentTime(next);
           if (!movie.is_purchased && next >= FREE_PREVIEW_LIMIT) setPaywallReached(true);
-          setGestureNotice(direction < 0 ? '−10 seconds' : '+10 seconds');
+          setGestureNotice(direction < 0 ? 'backward' : 'forward');
           window.setTimeout(() => setGestureNotice(null), 900);
         }
         lastTapRef.current = null;
@@ -735,8 +737,22 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
         )}
 
         {gestureNotice && (
-          <div className="absolute left-1/2 top-1/2 z-40 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/20 bg-black/75 px-5 py-3 text-sm font-semibold text-white shadow-xl pointer-events-none">
-            {gestureNotice}
+          <div className={`absolute z-40 pointer-events-none flex flex-col items-center gap-3 rounded-2xl border border-white/15 bg-black/75 px-5 py-4 text-white shadow-xl ${gestureNotice === 'brightness' ? 'left-5 top-1/2 -translate-y-1/2' : gestureNotice === 'volume' ? 'right-5 top-1/2 -translate-y-1/2' : 'left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2'}`}>
+            {gestureNotice === 'backward' ? (
+              <><RotateCcw className="h-8 w-8" /><span className="text-sm font-semibold">10 seconds</span></>
+            ) : gestureNotice === 'forward' ? (
+              <><RotateCw className="h-8 w-8" /><span className="text-sm font-semibold">10 seconds</span></>
+            ) : gestureNotice === 'brightness' ? (
+              <><Sun className="h-5 w-5" /><div className="h-28 w-2 overflow-hidden rounded-full bg-white/25 flex items-end"><div className="w-full rounded-full bg-cyan-300" style={{ height: `${brightness * 100}%` }} /></div></>
+            ) : (
+              <><Volume2 className="h-5 w-5" /><div className="h-28 w-2 overflow-hidden rounded-full bg-white/25 flex items-end"><div className="w-full rounded-full bg-cyan-300" style={{ height: `${(isMuted ? 0 : volume) * 100}%` }} /></div></>
+            )}
+          </div>
+        )}
+        {showControls && isPlaying && (
+          <div className="absolute inset-y-0 left-0 right-0 z-20 flex items-center justify-between px-3 sm:px-8 pointer-events-none">
+            <button type="button" onClick={(event) => { event.stopPropagation(); const video = videoRef.current; if (!video) return; const next = Math.max(0, video.currentTime - 10); video.currentTime = next; setCurrentTime(next); setGestureNotice('backward'); window.setTimeout(() => setGestureNotice(null), 1000); }} className="pointer-events-auto flex h-14 w-14 flex-col items-center justify-center rounded-full bg-black/45 text-white hover:bg-black/65" aria-label="Rewind 10 seconds"><RotateCcw className="h-6 w-6" /><span className="text-[10px]">10</span></button>
+            <button type="button" onClick={(event) => { event.stopPropagation(); const video = videoRef.current; if (!video) return; const maxTime = movie.is_purchased ? duration : FREE_PREVIEW_LIMIT; const next = Math.min(maxTime, video.currentTime + 10); video.currentTime = next; setCurrentTime(next); if (!movie.is_purchased && next >= FREE_PREVIEW_LIMIT) setPaywallReached(true); setGestureNotice('forward'); window.setTimeout(() => setGestureNotice(null), 1000); }} className="pointer-events-auto flex h-14 w-14 flex-col items-center justify-center rounded-full bg-black/45 text-white hover:bg-black/65" aria-label="Forward 10 seconds"><RotateCw className="h-6 w-6" /><span className="text-[10px]">10</span></button>
           </div>
         )}
 
@@ -912,15 +928,6 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
 
               {/* Right Controls: fit/crop, PiP & fullscreen */}
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setFitScreen(value => !value)}
-                  className={`p-2 rounded-lg border text-slate-300 hover:text-white transition-colors ${fitScreen ? 'border-cyan-400/60 bg-cyan-500/15 text-cyan-300' : 'border-transparent hover:bg-white/10'}`}
-                  title={fitScreen ? 'Fit entire video' : 'Fill screen (crop edges)'}
-                  aria-label={fitScreen ? 'Fit video to screen' : 'Fill screen'}
-                >
-                  <Scan className="w-4 h-4" />
-                </button>
                 {isPiPSupported && (
                   <button
                     onClick={togglePiP}
