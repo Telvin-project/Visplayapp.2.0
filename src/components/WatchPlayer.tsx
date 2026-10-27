@@ -643,6 +643,11 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
   };
 
   const handlePlayerTouchEnd = (event: React.TouchEvent<HTMLDivElement>) => {
+    // Taps on controls should activate the control, not toggle the overlay.
+    if (event.target instanceof Element && event.target.closest('button, input')) {
+      touchStartRef.current = null;
+      return;
+    }
     const touch = event.changedTouches[0];
     const start = touchStartRef.current;
     if (!touch || !start || !playerContainerRef.current) return;
@@ -714,6 +719,13 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
     }
     touchStartRef.current = null;
   };
+
+  useEffect(() => {
+    return () => {
+      if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+      if (tapTimeoutRef.current !== null) window.clearTimeout(tapTimeoutRef.current);
+    };
+  }, []);
 
   const formatTime = (secs: number) => {
     const mins = Math.floor(secs / 60);
