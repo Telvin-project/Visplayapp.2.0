@@ -29,10 +29,14 @@ const AppContent: React.FC = () => {
 
   // Open a shared movie directly when the app loads with ?watch=<movieId>.
   useEffect(() => {
-    const sharedMovieId = new URLSearchParams(window.location.search).get('watch');
+    const params = new URLSearchParams(window.location.search);
+    const sharedMovieId = params.get('watch');
     if (sharedMovieId) {
       setSelectedMovieId(sharedMovieId);
       setCurrentView('watch');
+    } else if (params.get('account-deletion') === '1') {
+      // Public web route used by Google Play's external account-deletion resource.
+      setCurrentView('library');
     }
   }, []);
 
