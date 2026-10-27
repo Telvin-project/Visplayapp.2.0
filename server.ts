@@ -241,8 +241,22 @@ async function startServer() {
       return;
     }
 
+    const normalizedEmail = String(email).trim().toLowerCase();
+    // Block legacy demo credentials even if an old database snapshot still contains
+    // the seeded demo accounts. Production access must use real account credentials.
+    const legacyDemoCredentials = [
+      ['viewer@visplay.ng', 'viewer123'],
+      ['kunle@nollywood.ng', 'creator123'],
+      ['talk2visibyl@gmail.com', 'admin123'],
+      ['usitakatelvin@gmail.com', 'admin123'],
+    ];
+    if (legacyDemoCredentials.some(([demoEmail, demoPassword]) => normalizedEmail === demoEmail && password === demoPassword)) {
+      res.status(401).json({ error: 'These legacy demo credentials are disabled. Please sign in with your own account.' });
+      return;
+    }
+
     const db = loadDatabase();
-    const user = db.users.find(u => u.email.toLowerCase() === email.toLowerCase());
+    const user = db.users.find(u => u.email.toLowerCase() === normalizedEmail);
     if (!user || !bcrypt.compareSync(password, user.password_hash)) {
       res.status(401).json({ error: 'Invalid email or password.' });
       return;
