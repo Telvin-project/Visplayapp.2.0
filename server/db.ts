@@ -298,6 +298,21 @@ export async function deleteSupabaseAuthUserByEmail(email: string): Promise<bool
   throw new Error('Could not safely locate the Supabase account for deletion.');
 }
 
+/**
+ * Verify a Supabase access token against Supabase Auth before trusting any client identity claims.
+ * Uses the server-only service-role client; never expose this credential to the browser.
+ */
+export async function verifySupabaseAccessToken(accessToken: string) {
+  const client = getSupabaseClient();
+  if (!client) throw new Error('Supabase server authentication is not configured.');
+  const { data, error } = await client.auth.getUser(accessToken);
+  if (error || !data.user) throw new Error('Supabase access token is invalid or expired.');
+  if (!data.user.email || !data.user.email_confirmed_at) {
+    throw new Error('A verified email address is required for Google sign-in.');
+  }
+  return data.user;
+}
+
 /** Load the complete application state before accepting requests. */
 export async function initializeDatabase(): Promise<void> {
   const client = getSupabaseClient();
