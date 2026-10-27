@@ -1083,6 +1083,21 @@ async function startServer() {
       isLiked = true;
     }
 
+    const movie = db.movies.find((item: any) => item.id === movieId);
+    const creatorProfile = movie ? db.creator_profiles.find((profile: any) => profile.id === movie.creator_id) : null;
+    const creatorOwnerId = (creatorProfile as any)?.user_id || (creatorProfile as any)?.owner_user_id;
+    if (isLiked && creatorOwnerId && creatorOwnerId !== req.user!.id) {
+      db.notifications.push({
+        id: `notif_${uuidv4().substring(0, 8)}`,
+        user_id: creatorOwnerId,
+        title: 'Someone liked your movie',
+        message: `${req.user!.full_name || 'Someone'} liked "${movie?.title || 'your movie'}".`,
+        link: `/?watch=${encodeURIComponent(movieId)}`,
+        is_read: false,
+        created_at: new Date().toISOString(),
+      });
+    }
+
     await saveDatabase(db);
     const totalLikes = db.likes.filter(l => l.movie_id === movieId).length;
     res.json({ is_liked: isLiked, likes_count: totalLikes });
