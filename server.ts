@@ -1471,7 +1471,7 @@ async function startServer() {
 
     const secretKey = process.env.PAYSTACK_SECRET_KEY;
     if (!secretKey) {
-      res.status(503).json({ error: 'Paystack is not configured yet. Add PAYSTACK_SECRET_KEY to the backend environment.' });
+      res.status(503).json({ error: 'Secure payments are temporarily unavailable. Please contact support.' });
       return;
     }
 
@@ -1496,7 +1496,7 @@ async function startServer() {
       const result = await response.json() as any;
       if (!response.ok || !result.status || !result.data?.authorization_url) {
         console.error('Paystack initialization failed:', result?.message || response.status);
-        res.status(502).json({ error: 'Paystack could not start checkout. Please try again.' });
+        res.status(502).json({ error: 'Secure checkout could not be started. Please try again.' });
         return;
       }
 
@@ -1518,7 +1518,7 @@ async function startServer() {
       res.json({ reference, authorization_url: result.data.authorization_url });
     } catch (error) {
       console.error('Paystack initialization error:', error);
-      res.status(502).json({ error: 'Unable to connect to Paystack. Please try again.' });
+      res.status(502).json({ error: 'Unable to connect to secure checkout. Please try again.' });
     }
   });
 
@@ -1531,7 +1531,7 @@ async function startServer() {
     }
     const secretKey = process.env.PAYSTACK_SECRET_KEY;
     if (!secretKey) {
-      res.status(503).json({ error: 'Paystack is not configured on the backend.' });
+      res.status(503).json({ error: 'Secure payments are temporarily unavailable. Please contact support.' });
       return;
     }
 
@@ -1554,7 +1554,7 @@ async function startServer() {
       const result = await response.json() as any;
       const payment = result?.data;
       if (!response.ok || !result?.status || payment?.status !== 'success') {
-        res.status(402).json({ error: 'Paystack has not confirmed a successful payment yet.' });
+        res.status(402).json({ error: 'Payment has not been confirmed yet. Please retry shortly.' });
         return;
       }
       if (payment.reference !== tx.reference || payment.currency !== 'NGN' || Number(payment.amount) !== tx.amount_ngn * 100 ||
@@ -1589,7 +1589,7 @@ async function startServer() {
       res.json({ success: true, wallet_balance: user.wallet_balance, transaction: latestTx });
     } catch (error) {
       console.error('Paystack verification error:', error);
-      res.status(502).json({ error: 'Could not verify payment with Paystack. Please retry shortly.' });
+      res.status(502).json({ error: 'Could not verify payment yet. Please retry shortly.' });
     }
   });
 
@@ -1616,7 +1616,7 @@ async function startServer() {
         }),
       });
       const result = await response.json() as any;
-      if (!response.ok || !result.status || !result.data?.authorization_url) return void res.status(502).json({ error: 'Paystack could not start movie checkout. Please try again.' });
+      if (!response.ok || !result.status || !result.data?.authorization_url) return void res.status(502).json({ error: 'Secure movie checkout could not be started. Please try again.' });
       db.transactions.push({
         id: `tx_${uuidv4().substring(0, 8)}`, user_id: req.user!.id, amount_ngn: price, type: 'purchase', status: 'pending',
         reference, payment_method: 'paystack', description: `Direct payment to unlock movie: "${movie.title}"`,
@@ -1627,7 +1627,7 @@ async function startServer() {
       res.json({ reference, authorization_url: result.data.authorization_url, movie_id: movie.id });
     } catch (error) {
       console.error('Paystack movie checkout initialization failed:', error);
-      res.status(502).json({ error: 'Unable to connect to Paystack. Please try again.' });
+      res.status(502).json({ error: 'Unable to connect to secure checkout. Please try again.' });
     }
   });
 
@@ -1635,7 +1635,7 @@ async function startServer() {
     const reference = String(req.body?.reference || '').trim();
     if (!reference) return void res.status(400).json({ error: 'Transaction reference is required.' });
     const secretKey = process.env.PAYSTACK_SECRET_KEY;
-    if (!secretKey) return void res.status(503).json({ error: 'Paystack is not configured on the backend.' });
+    if (!secretKey) return void res.status(503).json({ error: 'Secure payments are temporarily unavailable. Please contact support.' });
     const db = loadDatabase();
     const tx = db.transactions.find(t => t.reference === reference && t.user_id === req.user!.id && t.type === 'purchase' && t.metadata?.purpose === 'movie_purchase');
     if (!tx) return void res.status(404).json({ error: 'Movie payment record not found.' });
@@ -1653,7 +1653,7 @@ async function startServer() {
       const response = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, { headers: { Authorization: `Bearer ${secretKey}` } });
       const result = await response.json() as any;
       const payment = result?.data;
-      if (!response.ok || !result?.status || payment?.status !== 'success') return void res.status(402).json({ error: 'Paystack has not confirmed a successful movie payment yet.' });
+      if (!response.ok || !result?.status || payment?.status !== 'success') return void res.status(402).json({ error: 'Movie payment has not been confirmed yet. Please retry shortly.' });
       if (payment.reference !== tx.reference || payment.currency !== 'NGN' || Number(payment.amount) !== tx.amount_ngn * 100 ||
           (payment.metadata?.user_id && payment.metadata.user_id !== req.user!.id) ||
           (payment.metadata?.movie_id && payment.metadata.movie_id !== movie.id) ||
