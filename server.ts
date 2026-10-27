@@ -2295,6 +2295,11 @@ async function startServer() {
       return;
     }
 
+    if (db.payouts.some(p => p.creator_id === creator_id && p.status === 'pending')) {
+      res.status(409).json({ error: 'A pending payout request already exists for this creator.' });
+      return;
+    }
+
     const accruedLedger = db.ledger.filter(l => l.creator_id === creator_id && l.status === 'accrued');
     if (accruedLedger.length === 0) {
       res.status(400).json({ error: 'No accrued earnings to request for this creator.' });
