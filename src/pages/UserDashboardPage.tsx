@@ -194,7 +194,7 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
         {[
           { id: 'library', label: `Unlocked Movies (${unlockedMovies.length})` },
           { id: 'history', label: `Watch History (${watchHistory.length})` },
-          { id: 'wallet', label: 'Wallet & Paystack History' },
+          { id: 'wallet', label: 'Wallet & Payment History' },
           { id: 'creators', label: `Followed Creators (${followedCreators.length})` },
           { id: 'notifications', label: `Notifications (${notifications.filter(n => !n.is_read).length})` },
           { id: 'profile', label: 'Account Profile' },
@@ -281,7 +281,7 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
               className="py-3 px-5 rounded-xl font-bold text-xs bg-gradient-to-r from-cyan-500 to-blue-600 text-white flex items-center gap-2"
             >
               <Coins className="w-4 h-4" />
-              <span>Deposit Coins with Paystack</span>
+              <span>Deposit Coins</span>
             </button>
           </div>
 
