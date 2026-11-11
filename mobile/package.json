@@ -1,0 +1,28 @@
+{
+  "name": "visplay-reader-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "doctor": "expo-doctor",
+    "typecheck": "tsc --noEmit",
+    "test:policy": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "expo": "~58.0.0",
+    "expo-linking": "~58.0.16",
+    "expo-secure-store": "~58.0.2",
+    "expo-video": "~58.0.13",
+    "react": "19.3.0",
+    "react-native": "0.88.0",
+    "react-native-safe-area-context": "~5.11.1",
+    "react-native-webview": "14.0.1"
+  },
+  "devDependencies": {
+    "@types/react": "~19.3.0",
+    "typescript": "~5.9.3"
+  }
+}

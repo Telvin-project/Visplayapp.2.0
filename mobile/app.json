@@ -1,0 +1,31 @@
+{
+  "expo": {
+    "name": "VisPlay Reader",
+    "slug": "visplay-reader",
+    "version": "0.1.0",
+    "orientation": "default",
+    "userInterfaceStyle": "dark",
+    "icon": "./assets/icon.png",
+    "scheme": "visplayreader",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.visibyl.visplayreader"
+    },
+    "android": {
+      "package": "com.visibyl.visplayreader",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#07090E"
+      },
+      "permissions": [],
+      "edgeToEdgeEnabled": true
+    },
+    "plugins": [
+      "expo-secure-store"
+    ],
+    "extra": {
+      "policy": "payment-free-reader",
+      "releaseWarning": "Provider integrations, native Google OAuth and device/store verification are pending."
+    }
+  }
+}

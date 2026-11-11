@@ -3,6 +3,8 @@ services:
     name: visplayapp-2-0
     runtime: node
     plan: free
-    buildCommand: bun install && bun run build
-    startCommand: bun run start
-    healthCheckPath: /
+    # The free plan below is legacy and NOT authorized for live customer use.
+    # Employer must approve a suitable paid plan before production deployment.
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start
+    healthCheckPath: /_health/live

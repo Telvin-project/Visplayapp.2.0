@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { isMobileReader, isNativeReaderEmbed } from '../lib/distribution';
 import {
   Coins,
   Search,
@@ -18,6 +19,7 @@ import {
   X,
   Radio,
   CheckCircle2,
+  Users,
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -35,6 +37,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   searchQuery = '',
   onSelectMovieId,
 }) => {
+  const readerMode = isMobileReader();
   const { user, creatorProfile, logout, openAuthModal, openDepositModal, openCreatorApplyModal } = useAuth();
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -117,9 +120,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               }`}
             >
               <span>10-Episode Bundles</span>
-              <span className="text-[10px] text-fuchsia-300 font-mono bg-fuchsia-950/60 border border-fuchsia-800/80 rounded px-1.5 py-0.5">
-                ₦700
-              </span>
+              {!readerMode && <span className="text-[10px] text-fuchsia-300 font-mono bg-fuchsia-950/60 border border-fuchsia-800/80 rounded px-1.5 py-0.5">₦700</span>}
             </button>
             <button
               onClick={() => navigateTo('live')}
@@ -140,7 +141,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             </button>
 
             {/* Admin Quick Link if Super Admin */}
-            {user?.role === 'admin' && (
+            {!readerMode && user?.role === 'admin' && (
               <button
                 onClick={() => navigateTo('admin')}
                 className={`whitespace-nowrap transition-colors flex items-center gap-1 text-amber-400 hover:text-amber-300 font-semibold ${
@@ -200,7 +201,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             )}
 
             {/* User Wallet Pill */}
-            {user && (
+            {user && !readerMode && (
               <div className="flex items-center bg-slate-900/90 border border-slate-800 rounded-xl p-1 pr-2 gap-1.5">
                 <button
                   onClick={() => openDepositModal()}
@@ -254,19 +255,16 @@ export const Navbar: React.FC<NavbarProps> = ({
                       className="w-full px-4 py-2 text-left hover:bg-slate-800/80 flex items-center gap-2 text-slate-200 transition-colors"
                     >
                       <FolderLock className="w-4 h-4 text-cyan-400" />
-                      <span>My Library & Purchases</span>
+                      <span>{readerMode ? 'My Library' : 'My Library & Purchases'}</span>
                     </button>
 
-                    <button
-                      onClick={() => openDepositModal()}
-                      className="w-full px-4 py-2 text-left hover:bg-slate-800/80 flex items-center gap-2 text-slate-200 transition-colors"
-                    >
+                    {!readerMode && <button onClick={() => openDepositModal()} className="w-full px-4 py-2 text-left hover:bg-slate-800/80 flex items-center gap-2 text-slate-200 transition-colors">
                       <Coins className="w-4 h-4 text-emerald-400" />
                       <span>Deposit Coins</span>
-                    </button>
+                    </button>}
 
                     {/* Creator Studio / Creator Apply */}
-                    {creatorProfile?.status === 'approved' || user.role === 'creator' || user.role === 'admin' ? (
+                    {!readerMode && (creatorProfile?.status === 'approved' || user.role === 'creator' || user.role === 'admin' ? (
                       <button
                         onClick={() => navigateTo('studio')}
                         className="w-full px-4 py-2 text-left hover:bg-slate-800/80 flex items-center gap-2 text-fuchsia-300 transition-colors"
@@ -282,10 +280,10 @@ export const Navbar: React.FC<NavbarProps> = ({
                         <Video className="w-4 h-4 text-fuchsia-400" />
                         <span>Apply as Creator (85% Split)</span>
                       </button>
-                    )}
+                    ))}
 
                     {/* Admin Portal */}
-                    {user.role === 'admin' && (
+                    {!readerMode && user.role === 'admin' && (
                       <button
                         onClick={() => setCurrentView('admin')}
                         className="w-full px-4 py-2 text-left hover:bg-slate-800/80 flex items-center gap-2 text-amber-300 transition-colors"
@@ -301,6 +299,11 @@ export const Navbar: React.FC<NavbarProps> = ({
                     >
                       <UserIcon className="w-4 h-4 text-slate-400" />
                       <span>Account Settings</span>
+                    </button>
+
+                    <button onClick={() => navigateTo('safety')} className="w-full px-4 py-2 text-left hover:bg-slate-800/80 flex items-center gap-2 text-slate-200 transition-colors">
+                      <ShieldAlert className="w-4 h-4 text-amber-400" />
+                      <span>Safety Center & Reports</span>
                     </button>
 
                     <div className="border-t border-slate-800 my-1"></div>
@@ -336,11 +339,12 @@ export const Navbar: React.FC<NavbarProps> = ({
       </header>
 
       {/* Mobile Bottom Navigation Bar (Natural Thumb Reach Zone) */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-[#07090e]/95 backdrop-blur-md border-t border-slate-800/80 px-2 py-2">
-        <div className="grid grid-cols-5 items-center justify-around text-center">
+      {!isNativeReaderEmbed() && <nav aria-label="Mobile navigation" style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }} className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-[#07090e]/95 backdrop-blur-md border-t border-slate-800/80 px-2 py-2">
+        <div className={`grid ${readerMode ? 'grid-cols-4' : 'grid-cols-5'} items-center justify-around text-center`}>
           <button
             onClick={() => setCurrentView('home')}
-            className={`flex flex-col items-center py-1 transition-colors ${
+            aria-label="Home" aria-current={currentView === 'home' ? 'page' : undefined}
+            className={`flex min-h-11 flex-col items-center justify-center py-1 transition-colors ${
               currentView === 'home' ? 'text-cyan-400 font-semibold' : 'text-slate-400'
             }`}
           >
@@ -350,7 +354,8 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           <button
             onClick={() => setCurrentView('bundles')}
-            className={`flex flex-col items-center py-1 transition-colors ${
+            aria-label="Series bundles" aria-current={currentView === 'bundles' ? 'page' : undefined}
+            className={`flex min-h-11 flex-col items-center justify-center py-1 transition-colors ${
               currentView === 'bundles' ? 'text-fuchsia-400 font-semibold' : 'text-slate-400'
             }`}
           >
@@ -358,7 +363,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             <span className="text-[10px]">Bundles</span>
           </button>
 
-          <button
+          {!readerMode && <button
             onClick={() => {
               if (creatorProfile?.status === 'approved' || user?.role === 'creator' || user?.role === 'admin') {
                 setCurrentView('studio');
@@ -372,9 +377,9 @@ export const Navbar: React.FC<NavbarProps> = ({
           >
             <Video className="w-5 h-5 mb-0.5" />
             <span className="text-[10px]">Studio</span>
-          </button>
+          </button>}
 
-          <button
+          {!readerMode && <button
             onClick={() => {
               if (user) {
                 openDepositModal();
@@ -386,7 +391,12 @@ export const Navbar: React.FC<NavbarProps> = ({
           >
             <Coins className="w-5 h-5 mb-0.5 text-cyan-400" />
             <span className="text-[10px]">Wallet</span>
-          </button>
+          </button>}
+
+          {readerMode && <button onClick={() => navigateTo('creators')} aria-label="Creators" aria-current={currentView === 'creators' ? 'page' : undefined} className="flex min-h-11 flex-col items-center justify-center py-1 text-slate-300">
+            <Users className="w-5 h-5 mb-0.5" />
+            <span className="text-[10px]">Creators</span>
+          </button>}
 
           <button
             onClick={() => {
@@ -396,7 +406,8 @@ export const Navbar: React.FC<NavbarProps> = ({
                 openAuthModal('login');
               }
             }}
-            className={`flex flex-col items-center py-1 transition-colors ${
+            aria-label="My library" aria-current={currentView === 'library' ? 'page' : undefined}
+            className={`flex min-h-11 flex-col items-center justify-center py-1 transition-colors ${
               currentView === 'library' ? 'text-cyan-400 font-semibold' : 'text-slate-400'
             }`}
           >
@@ -404,7 +415,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             <span className="text-[10px]">Library</span>
           </button>
         </div>
-      </nav>
+      </nav>}
     </>
   );
 };

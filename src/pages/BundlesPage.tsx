@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { EpisodeBundle, Movie } from '../types';
 import { useAuth } from '../context/AuthContext';
+import { isMobileReader } from '../lib/distribution';
 import { Tv, Play, Lock, Unlock, CheckCircle2, Clock, Sparkles, Coins, ArrowRight } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -15,6 +16,7 @@ export const BundlesPage: React.FC<BundlesPageProps> = ({
   onSelectCreator,
   selectedBundleId,
 }) => {
+  const readerMode = isMobileReader();
   const { user, openAuthModal, openDepositModal, refreshUser } = useAuth();
   const [bundles, setBundles] = useState<EpisodeBundle[]>([]);
   const [activeBundle, setActiveBundle] = useState<EpisodeBundle | null>(null);
@@ -48,6 +50,7 @@ export const BundlesPage: React.FC<BundlesPageProps> = ({
   };
 
   const handlePurchaseBundle = async (bundle: EpisodeBundle) => {
+    if (readerMode) return; // Native reader does not transact for digital media.
     if (!user) {
       openAuthModal('login');
       return;
@@ -167,6 +170,10 @@ export const BundlesPage: React.FC<BundlesPageProps> = ({
                   </span>
                   <span className="text-[11px] text-slate-400 block">Unlimited streaming access</span>
                 </div>
+              ) : readerMode ? (
+                <p className="max-w-xs rounded-xl border border-slate-700 bg-slate-900/70 px-5 py-3 text-center text-xs text-slate-300">
+                  Free episode previews are available. Full episodes play here when your account already has access.
+                </p>
               ) : (
                 <button
                   onClick={() => handlePurchaseBundle(activeBundle)}

@@ -1,0 +1,14 @@
+export type ReaderConfig = { origin: string; readerUrl: string };
+export type NativeMessage = { type: 'OPEN_PREVIEW' | 'SAVE_FILM'; movieId: string; title: string };
+export type SavedFilm = { movieId: string; title: string };
+export type ReaderDeepLink = { type: 'watch'; movieId: string } | { type: 'saved' | 'settings' };
+export const MOVIE_ID_PATTERN: RegExp;
+export const SAVED_FILM_LIMIT: number;
+export function parseReaderConfig(configuredUrl: unknown): ReaderConfig | null;
+export function isAllowedReaderNavigation(url: unknown, trustedOrigin: unknown): boolean;
+export function parseNativeMessage(payload: unknown): NativeMessage | null;
+export function sanitizeSavedFilm(raw: unknown): SavedFilm | null;
+export function parseSavedFilms(payload: unknown): SavedFilm[];
+export function addSavedFilm(existing: SavedFilm[], item: unknown): SavedFilm[];
+export function publicPreviewUrl(origin: unknown, movieId: unknown): string | null;
+export function parseReaderDeepLink(raw: unknown): ReaderDeepLink | null;

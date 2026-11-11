@@ -2,6 +2,14 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
     {
+      "source": "/reader",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/reader/",
+      "destination": "/index.html"
+    },
+    {
       "source": "/uploads/:path*",
       "destination": "https://visplayapp-2-0.onrender.com/uploads/:path*"
     },

@@ -1,0 +1,28 @@
+% VisPlay runbook PDF layout (not used by the web application).
+\usepackage{xcolor}
+\definecolor{VPInk}{HTML}{172338}
+\definecolor{VPTeal}{HTML}{087C92}
+\definecolor{VPMuted}{HTML}{64748B}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{microtype}
+\usepackage{array}
+\setlength{\headheight}{15pt}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\sffamily\footnotesize\textcolor{VPInk}{VISPLAY  /  RELEASE READINESS}}
+\fancyhead[R]{\sffamily\footnotesize\textcolor{VPMuted}{NOV 2026}}
+\fancyfoot[L]{\sffamily\scriptsize\textcolor{VPMuted}{EMPLOYER'S TEST AND INTEGRATION GUIDE}}
+\fancyfoot[R]{\sffamily\scriptsize\textcolor{VPInk}{PAGE \thepage}}
+\renewcommand{\headrulewidth}{0.45pt}
+\renewcommand{\footrulewidth}{0pt}
+\titleformat*{\section}{\Large\bfseries\sffamily\color{VPInk}}
+\titleformat*{\subsection}{\large\bfseries\sffamily\color{VPTeal}}
+\titleformat*{\subsubsection}{\normalsize\bfseries\sffamily\color{VPInk}}
+\titlespacing*{\section}{0pt}{18pt}{9pt}
+\titlespacing*{\subsection}{0pt}{15pt}{7pt}
+\titlespacing*{\subsubsection}{0pt}{12pt}{5pt}
+\setlength{\parskip}{4pt}
+\setlength{\emergencystretch}{3em}
+\renewcommand{\arraystretch}{1.19}
+\sloppy

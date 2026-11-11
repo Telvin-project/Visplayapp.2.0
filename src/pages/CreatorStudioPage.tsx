@@ -26,28 +26,6 @@ interface CreatorStudioPageProps {
   onSelectMovie: (id: string) => void;
 }
 
-const readVideoDurationSeconds = (file: File): Promise<number> => new Promise((resolve, reject) => {
-  const objectUrl = URL.createObjectURL(file);
-  const probe = document.createElement('video');
-  const cleanup = () => {
-    probe.removeAttribute('src');
-    probe.load();
-    URL.revokeObjectURL(objectUrl);
-  };
-  probe.preload = 'metadata';
-  probe.onloadedmetadata = () => {
-    const seconds = Number.isFinite(probe.duration) ? Math.round(probe.duration) : 0;
-    cleanup();
-    if (seconds > 0) resolve(seconds);
-    else reject(new Error('Could not read the full movie duration from this video file.'));
-  };
-  probe.onerror = () => {
-    cleanup();
-    reject(new Error('Could not read this video file’s duration. Please try an MP4 video.'));
-  };
-  probe.src = objectUrl;
-});
-
 export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMovie }) => {
   const { user, creatorProfile, openCreatorApplyModal, loading: authLoading } = useAuth();
   const [channelData, setChannelData] = useState<any>(null);
@@ -59,10 +37,15 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
   const [title, setTitle] = useState('');
   const [synopsis, setSynopsis] = useState('');
   const [genre, setGenre] = useState('Action & Crime');
+  const [contentRating, setContentRating] = useState<'GENERAL' | 'PARENTAL_GUIDANCE' | 'TEEN' | 'ADULT'>('GENERAL');
   const [releaseYear, setReleaseYear] = useState(new Date().getFullYear().toString());
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [posterFile, setPosterFile] = useState<File | null>(null);
   const [rightsConfirmed, setRightsConfirmed] = useState(false);
+  const [creatorPolicyAccepted, setCreatorPolicyAccepted] = useState(false);
+  const [rightsBasis, setRightsBasis] = useState<'original' | 'licensed' | 'authorized'>('original');
+  const [rightsHolder, setRightsHolder] = useState('');
+  const [rightsEvidenceReference, setRightsEvidenceReference] = useState('');
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const lastNotificationProgress = useRef(-1);
@@ -122,21 +105,27 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
 
   const handleChannelImageChange = async (file: File | undefined, kind: 'avatar' | 'cover') => {
     if (!file) return;
-    if (!file.type.startsWith('image/')) { alert('Please choose an image file.'); return; }
-    if (file.size > 15 * 1024 * 1024) { alert('Images must be 15 MB or smaller.'); return; }
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { alert('Choose a JPEG, PNG or WebP image.'); return; }
+    if (file.size > 10 * 1024 * 1024) { alert('Images must be 10 MB or smaller.'); return; }
     setMediaSaving(true);
     try {
       const signed = await fetch('/api/movies/upload-url', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folder: 'posters', filename: file.name, contentType: file.type, size: file.size }),
+        body: JSON.stringify({ folder: 'posters', usage: kind === 'cover' ? 'banner' : 'avatar', filename: file.name, contentType: file.type, size: file.size }),
       });
       const signedData = await signed.json();
       if (!signed.ok) throw new Error(signedData.error || 'Could not prepare image upload.');
       const uploaded = await fetch(signedData.uploadUrl, { method: 'PUT', headers: { 'Content-Type': file.type }, body: file });
       if (!uploaded.ok) throw new Error('Image upload failed. Please try again.');
+      const finalized = await fetch('/api/movies/uploads/complete', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: signedData.sessionId }),
+      });
+      const finalizedData = await finalized.json().catch(() => ({}));
+      if (!finalized.ok) throw new Error(finalizedData.error || 'Image validation failed.');
       const saved = await fetch('/api/creators/my-channel/media', {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ [kind === 'avatar' ? 'channel_avatar_url' : 'channel_banner_url']: signedData.publicUrl }),
+        body: JSON.stringify({ kind: kind === 'cover' ? 'banner' : 'avatar', image_upload_id: finalizedData.sessionId }),
       });
       const savedData = await saved.json();
       if (!saved.ok) throw new Error(savedData.error || 'Could not save channel image.');
@@ -174,6 +163,18 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
       setUploadError('You must confirm distribution ownership & rights.');
       return;
     }
+    if (!creatorPolicyAccepted || rightsHolder.trim().length < 2) {
+      setUploadError('Accept the creator rules and state the person or company holding the movie distribution rights.');
+      return;
+    }
+    if (!videoFile || videoFile.type !== 'video/mp4' || !videoFile.name.toLowerCase().endsWith('.mp4') || videoFile.size > 500 * 1024 * 1024) {
+      setUploadError('Choose an MP4 movie file no larger than 500 MB.');
+      return;
+    }
+    if (posterFile && (!['image/jpeg', 'image/png', 'image/webp'].includes(posterFile.type) || posterFile.size > 10 * 1024 * 1024)) {
+      setUploadError('Choose a JPEG, PNG or WebP poster no larger than 10 MB.');
+      return;
+    }
 
     setUploadError(null);
     setUploadSuccess(null);
@@ -184,9 +185,8 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
     updateUploadProgress(0);
 
     try {
-      let videoUrl = '';
-      let posterUrl = '';
-      const uploadedDurationSeconds = videoFile ? await readVideoDurationSeconds(videoFile) : 0;
+      let videoUploadId = '';
+      let posterUploadId = '';
 
       const uploadDirectlyToStorage = async (
         file: File,
@@ -207,7 +207,6 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
           const init = await initResponse.json().catch(() => ({}));
           if (!initResponse.ok) throw new Error(init.error || 'Could not start resumable video upload.');
           const loadedByPart = new Array<number>(partCount).fill(0);
-          let maxReportedProgress = progressStart;
           const completedParts: Array<{ PartNumber: number; ETag: string }> = new Array(partCount);
           const reportProgress = () => {
             const loaded = loadedByPart.reduce((sum, value) => sum + value, 0);
@@ -225,7 +224,7 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
                 const urlResponse = await fetch('/api/movies/multipart/part-url', {
                   method: 'POST', credentials: 'include',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ key: init.key, uploadId: init.uploadId, partNumber: index + 1 }),
+                  body: JSON.stringify({ sessionId: init.sessionId, partNumber: index + 1 }),
                 });
                 const signedPart = await urlResponse.json().catch(() => ({}));
                 if (!urlResponse.ok) throw new Error(signedPart.error || 'Could not prepare an upload part.');
@@ -278,16 +277,16 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
             const completeResponse = await fetch('/api/movies/multipart/complete', {
               method: 'POST', credentials: 'include',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ key: init.key, uploadId: init.uploadId, parts: completedParts }),
+              body: JSON.stringify({ sessionId: init.sessionId, parts: completedParts }),
             });
             const completed = await completeResponse.json().catch(() => ({}));
             if (!completeResponse.ok) throw new Error(completed.error || 'Could not finish storing the video.');
-            return completed.publicUrl || init.publicUrl;
+            return completed.sessionId;
           } catch (error) {
             await fetch('/api/movies/multipart/abort', {
               method: 'POST', credentials: 'include',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ key: init.key, uploadId: init.uploadId }),
+              body: JSON.stringify({ sessionId: init.sessionId }),
             }).catch(() => undefined);
             throw error;
           }
@@ -298,6 +297,7 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             folder,
+            usage: folder === 'posters' ? 'poster' : 'movie',
             filename: file.name,
             contentType: file.type || (folder === 'videos' ? 'video/mp4' : 'image/jpeg'),
             size: file.size,
@@ -336,24 +336,35 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
           xhr.onabort = () => reject(new Error('Upload cancelled.'));
           xhr.send(file);
         });
-        return signed.publicUrl;
+        const finalResponse = await fetch('/api/movies/uploads/complete', {
+          method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: signed.sessionId }),
+        });
+        const complete = await finalResponse.json().catch(() => ({}));
+        if (!finalResponse.ok) throw new Error(complete.error || 'Uploaded file failed security validation.');
+        return complete.sessionId;
       };
 
       if (videoFile) {
-        videoUrl = await uploadDirectlyToStorage(videoFile, 'videos', 5, posterFile ? 82 : 92);
+        videoUploadId = await uploadDirectlyToStorage(videoFile, 'videos', 5, posterFile ? 82 : 92);
       }
       if (posterFile) {
-        posterUrl = await uploadDirectlyToStorage(posterFile, 'posters', videoFile ? 82 : 5, 92);
+        posterUploadId = await uploadDirectlyToStorage(posterFile, 'posters', videoFile ? 82 : 5, 92);
       }
 
       const formData = new FormData();
       formData.append('title', title);
       formData.append('synopsis', synopsis);
       formData.append('genre', genre);
+      formData.append('content_rating', contentRating);
       formData.append('release_year', releaseYear);
       formData.append('rights_confirmed', 'true');
-      if (videoUrl) formData.append('video_url', videoUrl);
-      if (posterUrl) formData.append('poster_url', posterUrl);
+      formData.append('content_policy_accepted', 'true');
+      formData.append('rights_basis', rightsBasis);
+      formData.append('rights_holder', rightsHolder.trim());
+      if (rightsEvidenceReference.trim()) formData.append('rights_evidence_reference', rightsEvidenceReference.trim());
+      if (videoUploadId) formData.append('video_upload_id', videoUploadId);
+      if (posterUploadId) formData.append('poster_upload_id', posterUploadId);
 
       const response = await fetch('/api/movies/upload', {
         method: 'POST',
@@ -375,6 +386,9 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
       setVideoFile(null);
       setPosterFile(null);
       setRightsConfirmed(false);
+      setCreatorPolicyAccepted(false);
+      setRightsHolder('');
+      setRightsEvidenceReference('');
 
       await fetchChannelData();
     } catch (err: any) {
@@ -653,20 +667,24 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
               </div>
             </div>
 
+            <label className="block text-xs font-medium text-slate-300">Audience / age suitability (subject to human review)
+              <select value={contentRating} onChange={event => setContentRating(event.target.value as typeof contentRating)} className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-900 p-3 text-sm text-white"><option value="GENERAL">General audience</option><option value="PARENTAL_GUIDANCE">Parental guidance</option><option value="TEEN">Teen 13+</option><option value="ADULT">Adults only — not publishable until qualified age verification exists</option></select>
+            </label>
+
             {/* Video File Input */}
             <div className="p-4 bg-slate-900/80 border border-slate-800 rounded-2xl space-y-2">
               <label className="block text-xs font-medium text-slate-200 flex items-center gap-2">
                 <FileVideo className="w-4 h-4 text-cyan-400" />
-                <span>Upload Movie Video File (MP4, WebM)</span>
+                <span>Upload Movie Video File (MP4)</span>
               </label>
               <input
                 type="file"
-                accept="video/*"
+                accept="video/mp4,.mp4"
                 onChange={(e) => setVideoFile(e.target.files?.[0] || null)}
                 className="w-full text-xs text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-cyan-500/20 file:text-cyan-300 hover:file:bg-cyan-500/30 cursor-pointer"
               />
               <p className="text-[10px] text-slate-500">
-                Videos up to 500 MB are supported. Large videos upload in resumable chunks.
+                MP4 videos up to 500 MB are supported. Large files upload in resumable chunks, then pass private file verification.
               </p>
             </div>
 
@@ -691,6 +709,19 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
             </div>
 
             {/* Rights declaration */}
+            <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4 text-xs text-slate-300">
+              <p className="font-semibold text-white">Distribution rights declaration (required)</p>
+              <label className="block">Legal basis for uploading this title
+                <select value={rightsBasis} onChange={event => setRightsBasis(event.target.value as typeof rightsBasis)} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 p-3 text-sm text-white"><option value="original">I own the original rights</option><option value="licensed">I have a distribution licence</option><option value="authorized">I am authorized by the rights holder</option></select>
+              </label>
+              <label className="block">Legal rights holder (individual or company)
+                <input required maxLength={200} minLength={2} value={rightsHolder} onChange={event => setRightsHolder(event.target.value)} placeholder="Registered company or person's legal name" className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 p-3 text-sm text-white" />
+              </label>
+              <label className="block">Private proof/reference number (optional)
+                <input maxLength={300} value={rightsEvidenceReference} onChange={event => setRightsEvidenceReference(event.target.value)} placeholder="Contract ID or licence reference; do not paste private URLs or secrets" className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 p-3 text-sm text-white" />
+              </label>
+              <p className="text-[11px] text-amber-300">VisPlay may ask for independently verified permission before approval. Submission does not authorize immediate publication.</p>
+            </div>
             <div className="flex items-start gap-3 p-3 bg-slate-900/60 rounded-xl border border-slate-800">
               <input
                 type="checkbox"
@@ -700,8 +731,12 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
                 className="mt-0.5 rounded border-slate-700 text-cyan-500 focus:ring-cyan-500"
               />
               <label htmlFor="rights" className="text-xs text-slate-300">
-                I certify that I hold full legal intellectual property and distribution rights for this title.
+                I declare that I am the rights holder or have legally valid authorization to distribute this movie on VisPlay.
               </label>
+            </div>
+            <div className="flex items-start gap-3 rounded-xl border border-slate-800 bg-slate-900/60 p-3">
+              <input type="checkbox" id="creator-policy" checked={creatorPolicyAccepted} onChange={event => setCreatorPolicyAccepted(event.target.checked)} className="mt-0.5 rounded border-slate-700 text-cyan-500" />
+              <label htmlFor="creator-policy" className="text-xs text-slate-300">I accept the VisPlay creator safety rules (version 2026-11-11): no exploitation, hate, illegal content, harassment, stolen media or privacy violations; I understand reports may trigger human review and distribution holds. The employer must approve the public legal text before launch.</label>
             </div>
 
             {uploading && (
@@ -800,7 +835,7 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
               <span>Monthly Payout Ledger (85% Creator Split)</span>
             </h3>
             <p className="text-xs text-slate-400 leading-relaxed">
-              Disbursements occur once per month directly to your verified Nigerian bank account. All transactions are logged with an immutable audit trail.
+              Creator earnings are calculated from confirmed purchases. Monthly payout requests reserve eligible earnings but do not send money automatically. Bank transfer details and paid status require independent verification before settlement.
             </p>
 
             <div className="overflow-x-auto pt-2">
@@ -847,13 +882,15 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
             <h3 className="text-lg font-bold text-white">Schedule Creator Livestream</h3>
           </div>
 
+          <p role="status" className="rounded-xl border border-amber-900/60 bg-amber-950/20 p-3 text-xs text-amber-200">Live scheduling is temporarily unavailable. The previous external video-link system had no verified ownership, content review or live moderation. Engineering must deploy a monitored streaming provider and human safety process before enabling it.</p>
+
           {liveMessage && (
             <div className="p-3 bg-emerald-950/60 border border-emerald-800 rounded-xl text-xs text-emerald-300">
               {liveMessage}
             </div>
           )}
 
-          <form onSubmit={handleScheduleLive} className="space-y-3">
+          <form onSubmit={handleScheduleLive} className="space-y-3" aria-disabled="true">
             <div>
               <label className="block text-xs font-medium text-slate-300 mb-1">Live Title *</label>
               <input
@@ -879,10 +916,10 @@ export const CreatorStudioPage: React.FC<CreatorStudioPageProps> = ({ onSelectMo
 
             <button
               type="submit"
-              disabled={schedulingLive}
+              disabled
               className="w-full py-3 px-4 rounded-xl font-bold text-xs bg-rose-600 hover:bg-rose-500 text-white transition-all shadow-md"
             >
-              {schedulingLive ? 'Scheduling...' : 'Launch Live Schedule'}
+              Live streaming paused for safety
             </button>
           </form>
         </div>

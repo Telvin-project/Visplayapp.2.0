@@ -1,6 +1,7 @@
 import React from 'react';
 import { Movie } from '../types';
 import { Play, Clock, CheckCircle2, Eye, Heart } from 'lucide-react';
+import { isMobileReader } from '../lib/distribution';
 
 const resolvePosterUrl = (url?: string | null) => {
   if (!url) return '/posters/lagos_heist.jpg';
@@ -15,6 +16,7 @@ interface MovieCardProps {
 }
 
 export const MovieCard: React.FC<MovieCardProps> = ({ movie, onSelectMovie, onSelectCreator }) => {
+  const readerMode = isMobileReader();
   const formatDuration = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const hrs = Math.floor(mins / 60);
@@ -26,9 +28,10 @@ export const MovieCard: React.FC<MovieCardProps> = ({ movie, onSelectMovie, onSe
   return (
     <div className="group relative flex flex-col rounded-2xl bg-[#0d121d] border border-slate-800/80 overflow-hidden hover:border-cyan-500/50 hover:shadow-xl hover:shadow-cyan-950/20 transition-all duration-300">
       {/* Poster area */}
-      <div
+      <div role="button" tabIndex={0} aria-label={`View ${movie.title}`}
         onClick={() => onSelectMovie(movie.id)}
-        className="relative aspect-[3/4] w-full overflow-hidden bg-slate-900 cursor-pointer"
+        onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelectMovie(movie.id); } }}
+        className="relative block aspect-[3/4] w-full overflow-hidden bg-slate-900 cursor-pointer text-left"
       >
         <img
           src={resolvePosterUrl(movie.poster_url)}
@@ -52,7 +55,7 @@ export const MovieCard: React.FC<MovieCardProps> = ({ movie, onSelectMovie, onSe
             </span>
           ) : (
             <span className="text-[11px] font-semibold text-cyan-200 bg-cyan-950/90 border border-cyan-800/80 backdrop-blur-md px-2 py-0.5 rounded-lg font-mono">
-              ₦{movie.price_ngn || 100}
+              {readerMode ? 'PREVIEW' : `₦${movie.price_ngn || 100}`}
             </span>
           )}
 
@@ -83,18 +86,14 @@ export const MovieCard: React.FC<MovieCardProps> = ({ movie, onSelectMovie, onSe
           </div>
 
           {/* Title */}
-          <h4
-            onClick={() => onSelectMovie(movie.id)}
-            className="text-sm font-bold text-white line-clamp-1 hover:text-cyan-400 transition-colors cursor-pointer"
-            title={movie.title}
-          >
-            {movie.title}
+          <h4 className="text-sm font-bold text-white line-clamp-1">
+            <button type="button" onClick={() => onSelectMovie(movie.id)} className="text-left hover:text-cyan-400 transition-colors" title={movie.title}>{movie.title}</button>
           </h4>
         </div>
 
         {/* Creator Row & Views */}
         <div className="mt-3 pt-2.5 border-t border-slate-800/60 flex items-center justify-between text-xs">
-          <div
+          <button type="button" aria-label={`View creator ${movie.creator_name || 'channel'}`}
             onClick={(e) => {
               e.stopPropagation();
               onSelectCreator?.(movie.creator_id);
@@ -109,7 +108,7 @@ export const MovieCard: React.FC<MovieCardProps> = ({ movie, onSelectMovie, onSe
             <span className="text-[11px] text-slate-300 font-medium group-hover/creator:text-cyan-300 truncate max-w-[110px]">
               {movie.creator_name || 'Nollywood Studio'}
             </span>
-          </div>
+          </button>
 
           <div className="flex items-center gap-1 text-[11px] text-slate-400 font-mono">
             <Eye className="w-3 h-3 text-slate-400" />

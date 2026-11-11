@@ -3,6 +3,11 @@ import { useAuth } from '../context/AuthContext';
 import { X, Coins, ShieldCheck, CheckCircle2, ArrowRight, CreditCard, Sparkles, AlertCircle } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
+const pendingPaymentReference = () => {
+  try { return sessionStorage.getItem('visplay:pending-payment-reference'); }
+  catch { return null; }
+};
+
 export const WalletDepositModal: React.FC = () => {
   const { depositModalOpen, closeDepositModal, user, refreshUser } = useAuth();
   const [selectedAmount, setSelectedAmount] = useState<number>(1000);
@@ -10,11 +15,14 @@ export const WalletDepositModal: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [verificationRetry, setVerificationRetry] = useState(0);
 
   // Paystack redirects back with a transaction reference. Verify it server-side.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const reference = params.get('reference') || params.get('trxref');
+    // A signed-in user's unfinished verification can be retried even when
+    // the PSP callback URL was stripped by a browser redirect.
+    const reference = params.get('reference') || params.get('trxref') || pendingPaymentReference();
     if (!reference) return;
     const watchMovieId = params.get('watch');
     params.delete('reference');
@@ -35,22 +43,10 @@ export const WalletDepositModal: React.FC = () => {
           setError(result.error || 'Payment has not been confirmed. If you paid, retry verification shortly.');
           return;
         }
+        try { sessionStorage.removeItem('visplay:pending-payment-reference'); } catch { /* Browser may disable storage. */ }
         await refreshUser();
         if (isMoviePayment) {
           const movieId = result.movie_id || watchMovieId;
-          if (movieId && user?.id) {
-            // Preserve the precise stop point across the external checkout redirect.
-            // The player stores this position before opening checkout; the 5-minute
-            // boundary is the safe fallback if the browser did not retain that value.
-            const positionKey = `visplay-position:${user.id}:${movieId}`;
-            const resumeKey = `visplay-resume-after-payment:${user.id}:${movieId}`;
-            try {
-              const savedPosition = Number(localStorage.getItem(positionKey)) || 0;
-              const resumePosition = Math.max(300, savedPosition);
-              localStorage.setItem(positionKey, String(resumePosition));
-              localStorage.setItem(resumeKey, String(resumePosition));
-            } catch { /* The player can fall back to server watch history. */ }
-          }
           window.dispatchEvent(new CustomEvent('visplay-movie-payment-complete', { detail: { movieId } }));
           setSuccessMessage('Payment confirmed. Your movie is unlocked.');
         } else {
@@ -61,7 +57,7 @@ export const WalletDepositModal: React.FC = () => {
         setError('We could not verify this payment right now. Please try again.');
       }
     })();
-  }, [refreshUser]);
+  }, [refreshUser, verificationRetry, user?.id]);
 
   if (!depositModalOpen) return null;
 
@@ -86,6 +82,7 @@ export const WalletDepositModal: React.FC = () => {
       if (!initRes.ok || !initData.authorization_url) {
         throw new Error(initData.error || 'Could not start secure checkout.');
       }
+      try { sessionStorage.setItem('visplay:pending-payment-reference', initData.reference); } catch { /* Callback still has the reference. */ }
       // Navigate to Paystack. The callback reference is verified when the user returns.
       window.location.assign(initData.authorization_url);
     } catch (err: any) {
@@ -137,6 +134,10 @@ export const WalletDepositModal: React.FC = () => {
               <div className="mb-4 p-3 bg-rose-950/60 border border-rose-800 rounded-xl text-xs text-rose-300 flex items-center gap-2">
                 <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
                 <span>{error}</span>
+                {pendingPaymentReference() && (
+                  <button type="button" onClick={() => { setError(null); setVerificationRetry(value => value + 1); }}
+                    className="ml-auto shrink-0 underline font-semibold">Retry verification</button>
+                )}
               </div>
             )}
 

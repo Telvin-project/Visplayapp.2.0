@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Movie, EpisodeBundle, Livestream, Premiere, CreatorProfile } from '../types';
 import { MovieCard } from '../components/MovieCard';
+import { isMobileReader } from '../lib/distribution';
 import {
   Play,
   Clock,
@@ -318,7 +319,7 @@ export const HomePage: React.FC<HomePageProps> = ({
             <div className="space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <h2 className="text-lg sm:text-2xl font-bold text-white">{searchQuery ? `Search Results for "${searchQuery}"` : 'Trending Now'}</h2>
-                <span className="text-xs text-slate-400 shrink-0">₦100 per movie</span>
+                {!isMobileReader() && <span className="text-xs text-slate-400 shrink-0">₦100 per movie</span>}
               </div>
               <div className="flex gap-3 sm:gap-5 overflow-x-auto pb-3 snap-x snap-mandatory">
                 {movies.map((movie) => <div key={movie.id} className="w-[42vw] sm:w-[27vw] md:w-[21vw] lg:w-[16vw] max-w-[240px] shrink-0 snap-start"><MovieCard movie={movie} onSelectMovie={onSelectMovie} onSelectCreator={onSelectCreator} /></div>)}

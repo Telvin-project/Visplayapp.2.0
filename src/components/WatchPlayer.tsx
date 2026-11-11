@@ -33,8 +33,12 @@ import {
   ThumbsUp,
   ThumbsDown,
   MessageCircle,
+  Flag,
+  Ban,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
+import { isMobileReader } from '../lib/distribution';
+import { SafetyReportDialog } from './SafetyReportDialog';
 
 const resolveMediaUrl = (url?: string | null) => {
   if (!url) return '';
@@ -59,12 +63,12 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
   onSelectMovie,
   onSelectCreator,
 }) => {
+  const readerMode = isMobileReader();
   const { user, openAuthModal, openDepositModal, refreshUser } = useAuth();
   const videoRef = useRef<HTMLVideoElement>(null);
   const playerContainerRef = useRef<HTMLDivElement>(null);
   const lastTrackedSecondRef = useRef(0);
   const resumePositionRef = useRef(0);
-  const hasPendingPaymentResumeRef = useRef(false);
   const lastTapRef = useRef<{ at: number; x: number } | null>(null);
   const tapTimeoutRef = useRef<number | null>(null);
   const lastTouchAtRef = useRef(0);
@@ -104,6 +108,22 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
   const [submittingComment, setSubmittingComment] = useState(false);
   const [replyToId, setReplyToId] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
+  const [commentsPolicyAccepted, setCommentsPolicyAccepted] = useState(false);
+  const [reportTarget, setReportTarget] = useState<{type: 'movie' | 'comment' | 'creator'; id: string; label: string} | null>(null);
+  const [safetyNotice, setSafetyNotice] = useState('');
+
+  const blockCommentAuthor = async (authorId: string, label: string) => {
+    if (!user) { openAuthModal('login'); return; }
+    if (user.id === authorId) return;
+    if (!window.confirm(`Block ${label}? Their comments and creator videos will be hidden from your account.`)) return;
+    try {
+      const response = await fetch(`/api/safety/blocks/${encodeURIComponent(authorId)}`, { method: 'POST' });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Blocking failed.');
+      setComments(existing => existing.filter(comment => comment.user_id !== authorId));
+      setSafetyNotice('Account blocked. Manage blocked accounts in the Safety Center.');
+    } catch (caught) { setSafetyNotice(caught instanceof Error ? caught.message : 'Blocking failed.'); }
+  };
 
   // Unique session ID for analytics tracking
   const createViewSessionId = () => `sess_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
@@ -192,7 +212,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
         video.removeEventListener('loadedmetadata', handleLoadedMeta);
       };
     }
-  }, [movie.video_url]);
+  }, [movie.video_url, movie.is_purchased]);
 
   useEffect(() => {
     // Try to start playback when the selected movie is ready.
@@ -205,7 +225,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
     if (video.readyState >= 2) tryAutoplay();
     else video.addEventListener('canplay', tryAutoplay, { once: true });
     return () => video.removeEventListener('canplay', tryAutoplay);
-  }, [movie.id, movie.video_url]);
+  }, [movie.id, movie.video_url, movie.is_purchased]);
 
   useEffect(() => {
     // Fetch initial comments
@@ -224,22 +244,11 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
     resumePositionRef.current = 0;
     lastTrackedSecondRef.current = 0;
     const localKey = `visplay-position:${user?.id || 'guest'}:${movie.id}`;
-    const paymentResumeKey = `visplay-resume-after-payment:${user?.id || 'guest'}:${movie.id}`;
-    hasPendingPaymentResumeRef.current = false;
-    try {
-      const paymentResume = Number(localStorage.getItem(paymentResumeKey)) || 0;
-      if (paymentResume > 0) {
-        resumePositionRef.current = paymentResume;
-        hasPendingPaymentResumeRef.current = true;
-      } else {
-        resumePositionRef.current = Math.max(0, Number(localStorage.getItem(localKey)) || 0);
-      }
-    } catch { /* Optional resume cache. */ }
+    try { resumePositionRef.current = Math.max(0, Number(localStorage.getItem(localKey)) || 0); } catch { /* Optional resume cache. */ }
     if (user) {
       fetch('/api/user/library').then(response => response.ok ? response.json() : null).then(data => {
         const item = data?.watch_history?.find((entry: any) => entry.id === movie.id);
-        // A verified movie payment's saved resume point takes precedence over older watch history.
-        if (!item || hasPendingPaymentResumeRef.current) return;
+        if (!item) return;
         const position = Math.max(0, Number(item.last_position_seconds) || 0);
         resumePositionRef.current = position;
         try { localStorage.setItem(localKey, String(position)); } catch { /* Optional resume cache. */ }
@@ -485,6 +494,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
 
   // Purchase ₦100 Movie
   const handlePurchaseMovie = async () => {
+    if (readerMode) return; // No mobile digital-content purchases or checkout links.
     if (!user) {
       // Require sign-in before starting a movie-specific payment.
       openAuthModal('login');
@@ -508,6 +518,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
         return;
       }
       if (!checkout.authorization_url) throw new Error('Secure checkout could not be started. Please try again.');
+      try { sessionStorage.setItem('visplay:pending-payment-reference', checkout.reference); } catch { /* Paystack callback includes the reference. */ }
       // Persist the exact stop point before leaving for Paystack.
       try {
         localStorage.setItem(`visplay-position:${user.id}:${movie.id}`, String(Math.max(currentTime, FREE_PREVIEW_LIMIT)));
@@ -566,19 +577,23 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       openAuthModal('login');
       return;
     }
-    if (!newComment.trim()) return;
+    if (!newComment.trim() || !commentsPolicyAccepted) return;
 
     setSubmittingComment(true);
     try {
       const res = await fetch(`/api/movies/${movie.id}/comments`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ comment_text: newComment }),
+        body: JSON.stringify({ comment_text: newComment, content_policy_accepted: commentsPolicyAccepted }),
       });
       if (res.ok) {
         const data = await res.json();
         setComments([data.comment, ...comments]);
         setNewComment('');
+        setSafetyNotice('');
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setSafetyNotice(data.error || 'Comment could not be posted.');
       }
     } catch (e) {
       console.error(e);
@@ -606,17 +621,21 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
   const handleSubmitReply = async (e: React.FormEvent, parentId: string) => {
     e.preventDefault();
     if (!user) { openAuthModal('login'); return; }
-    if (!replyText.trim()) return;
+    if (!replyText.trim() || !commentsPolicyAccepted) { setSafetyNotice('Accept the community rules before replying.'); return; }
     try {
       const response = await fetch(`/api/movies/${movie.id}/comments`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ comment_text: replyText.trim(), parent_id: parentId }),
+        body: JSON.stringify({ comment_text: replyText.trim(), parent_id: parentId, content_policy_accepted: commentsPolicyAccepted }),
       });
       if (response.ok) {
         const data = await response.json();
         setComments(current => [...current, data.comment]);
         setReplyText('');
         setReplyToId(null);
+        setSafetyNotice('');
+      } else {
+        const data = await response.json().catch(() => ({}));
+        setSafetyNotice(data.error || 'Reply could not be posted.');
       }
     } catch (error) { console.error(error); }
   };
@@ -769,7 +788,8 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
       >
         <video
           ref={videoRef}
-          src={resolveMediaUrl(movie.video_url)}
+          key={`${movie.id}:${Boolean(movie.is_purchased)}`}
+          src={`${resolveMediaUrl(movie.video_url)}?mode=${movie.is_purchased ? 'full' : 'preview'}`}
           poster={resolveMediaUrl(movie.poster_url) || resolveMediaUrl(movie.backdrop_url)}
           className={`block w-full h-full ${fitScreen ? 'object-cover' : 'object-contain'} cursor-default`}
           style={{ filter: `brightness(${brightness})` }}
@@ -788,10 +808,6 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
                 const safePosition = movie.is_purchased ? Math.min(savedPosition, Math.max(0, videoRef.current.duration - 1)) : Math.min(savedPosition, FREE_PREVIEW_LIMIT);
                 videoRef.current.currentTime = safePosition;
                 setCurrentTime(safePosition);
-                if (hasPendingPaymentResumeRef.current) {
-                  try { localStorage.removeItem(`visplay-resume-after-payment:${user?.id || 'guest'}:${movie.id}`); } catch { /* Optional cache cleanup. */ }
-                  hasPendingPaymentResumeRef.current = false;
-                }
                 if (!movie.is_purchased && savedPosition >= FREE_PREVIEW_LIMIT) {
                   videoRef.current.pause();
                   setIsPlaying(false);
@@ -804,7 +820,12 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
           onError={() => { setIsPlaying(false); setIsVideoReady(false); setVideoLoadError(true); }}
           onEnded={() => {
             setIsPlaying(false);
-            trackViewingEvent(duration, true, true);
+            if (!movie.is_purchased) {
+              setPaywallReached(true);
+              trackViewingEvent(Math.min(duration, FREE_PREVIEW_LIMIT), true, false);
+            } else {
+              trackViewingEvent(duration, true, true);
+            }
           }}
           onClick={(event) => {
             // Mobile browsers synthesize a click after touch; the touch handler already
@@ -857,7 +878,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
           <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-black/90 px-6 text-center">
             <Film className="h-10 w-10 text-rose-300" />
             <p className="text-sm font-semibold text-white">This video could not be loaded.</p>
-            <p className="max-w-md text-xs text-slate-300">Check your connection and try again. If it still fails, the uploaded video file may no longer be available on the server.</p>
+            <p className="max-w-md text-xs text-slate-300">Secure playback may still be processing, or your connection may have been interrupted. Please try again shortly or contact VisPlay support.</p>
             <button type="button" onClick={() => { setVideoLoadError(false); if (videoRef.current) { videoRef.current.load(); videoRef.current.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false)); } }} className="rounded-lg bg-white px-4 py-2 text-xs font-bold text-black">Try again</button>
           </div>
         )}
@@ -882,20 +903,19 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
               </span>
 
               <h3 className="text-base sm:text-lg font-bold font-display text-white mt-2 mb-1 break-words">
-                Unlock "{movie.title}"
+                {readerMode ? 'Preview complete' : `Unlock "${movie.title}"`}
               </h3>
               <p className="text-[11px] text-slate-300 mb-3">
-                The full movie is {formatTime(duration)} long. You’ve reached the end of the free 5-minute preview. Unlock to continue watching from 05:00 for only{' '}
-                <strong className="text-cyan-300 font-mono text-sm">₦100</strong>.
+                {readerMode ? 'You have reached the end of this free preview. Full playback is available here when your account already has access.' : <>Enjoyed the first 5 minutes? Unlock the complete film for only <strong className="text-cyan-300 font-mono text-sm">₦100</strong>.</>}
               </p>
 
               {/* Wallet info */}
-              <div className="p-2 bg-slate-900 border border-slate-800 rounded-xl mb-3 flex items-center justify-between text-[11px]">
+              {!readerMode && <div className="p-2 bg-slate-900 border border-slate-800 rounded-xl mb-3 flex items-center justify-between text-[11px]">
                 <span className="text-slate-400">Your VisPlay Wallet</span>
                 <span className="font-bold text-cyan-300 font-mono text-sm">
                   ₦{(user?.wallet_balance || 0).toLocaleString()}
                 </span>
-              </div>
+              </div>}
 
               {purchaseError && (
                 <div className="mb-3 p-2 bg-rose-950/70 border border-rose-800 rounded-xl text-[11px]">
@@ -903,7 +923,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
                 </div>
               )}
 
-              <div className="space-y-2.5">
+              {!readerMode && <div className="space-y-2.5">
                 <button
                   onClick={handlePurchaseMovie}
                   disabled={purchasing}
@@ -927,7 +947,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
                   <Coins className="w-3.5 h-3.5 text-cyan-400" />
                   <span>Add Coins</span>
                 </button>
-              </div>
+              </div>}
             </div>
           </div>
         )}
@@ -941,14 +961,9 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
           {/* Top Bar inside player */}
           <div className="flex items-center justify-between pointer-events-auto">
             <div className="flex items-center gap-2">
-              <div className="min-w-0">
-                <span className="block text-xs font-semibold text-white drop-shadow truncate max-w-xs sm:max-w-md">
-                  {movie.title}
-                </span>
-                <span className="block text-[10px] text-slate-300">
-                  Full movie runtime: {formatTime(duration)}
-                </span>
-              </div>
+              <span className="text-xs font-semibold text-white drop-shadow truncate max-w-xs sm:max-w-md">
+                {movie.title}
+              </span>
               {!movie.is_purchased && (
                 <span className="text-[10px] font-medium text-cyan-300 bg-cyan-950/80 border border-cyan-800 px-2 py-0.5 rounded-md">
                   Preview: 5m Limit
@@ -962,7 +977,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
                   <CheckCircle2 className="w-3 h-3" />
                   <span>UNLOCKED</span>
                 </span>
-              ) : (
+              ) : !readerMode ? (
                 <button
                   onClick={handlePurchaseMovie}
                   className="px-3 py-1 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white text-[11px] font-bold rounded-lg shadow-md active:scale-95 transition-all flex items-center gap-1"
@@ -970,6 +985,8 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
                   <Unlock className="w-3 h-3" />
                   <span>Unlock (₦100)</span>
                 </button>
+              ) : (
+                <span className="rounded-lg bg-slate-800/90 px-2.5 py-1 text-[10px] text-slate-200">Preview only</span>
               )}
             </div>
           </div>
@@ -981,18 +998,17 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
               <input
                 type="range"
                 min={0}
-                max={duration}
+                max={movie.is_purchased ? duration : FREE_PREVIEW_LIMIT}
                 step={0.5}
                 value={currentTime}
                 onChange={handleSeek}
                 className="w-full h-1.5 bg-slate-700/80 rounded-lg appearance-none cursor-pointer accent-cyan-400 hover:h-2.5 transition-all"
               />
-              {/* Show the actual movie timeline; mark where the free preview ends. */}
-              {!movie.is_purchased && duration > FREE_PREVIEW_LIMIT && (
+              {/* 5-minute visual marker if unpaid */}
+              {!movie.is_purchased && (
                 <div
-                  className="absolute top-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-cyan-400 ring-2 ring-cyan-500/50 pointer-events-none"
-                  style={{ left: `${Math.min(100, (FREE_PREVIEW_LIMIT / duration) * 100)}%` }}
-                  title="Free preview ends at 5:00"
+                  className="absolute right-0 top-1/2 -translate-y-1/2 w-2 h-2 rounded-full bg-cyan-400 ring-2 ring-cyan-500/50"
+                  title="5-minute preview limit"
                 />
               )}
             </div>
@@ -1025,7 +1041,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
                 <div className="text-[11px] text-slate-300 font-mono">
                   <span>{formatTime(currentTime)}</span>
                   <span className="mx-1">/</span>
-                  <span>{formatTime(duration)}</span>
+                  <span>{formatTime(movie.is_purchased ? duration : FREE_PREVIEW_LIMIT)}</span>
                 </div>
               </div>
 
@@ -1090,6 +1106,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
             <h1 className="text-2xl sm:text-3xl font-extrabold font-display text-white">
               {movie.title}
             </h1>
+            {movie.content_rating && <p className="text-xs font-semibold text-amber-300">Audience classification: {movie.content_rating.replaceAll('_', ' ')}</p>}
           </div>
 
           {/* Social Interaction Buttons */}
@@ -1123,6 +1140,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
             >
               <Share2 className="w-5 h-5" />
             </button>
+            <button type="button" onClick={() => setReportTarget({ type: 'movie', id: movie.id, label: movie.title })} aria-label="Report movie" title="Report movie" className="flex items-center gap-1 rounded-xl border border-slate-700 px-3 py-2 text-xs text-amber-300"><Flag className="h-4 w-4" /><span className="hidden sm:inline">Report</span></button>
           </div>
         </div>
 
@@ -1197,7 +1215,8 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
             alt="User"
             className="w-9 h-9 rounded-xl object-cover border border-slate-700 shrink-0"
           />
-          <div className="flex-1 flex gap-2">
+          <div className="flex-1 space-y-2">
+            <div className="flex gap-2">
             <input
               type="text"
               value={newComment}
@@ -1208,17 +1227,20 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
             />
             <button
               type="submit"
-              disabled={!user || !newComment.trim() || submittingComment}
+              disabled={!user || !newComment.trim() || !commentsPolicyAccepted || submittingComment}
               className="px-4 py-2.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded-xl text-xs shadow-md transition-colors disabled:opacity-40 shrink-0 flex items-center gap-1.5"
             >
               <Send className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Post</span>
             </button>
+            </div>
+            <label className="flex items-start gap-2 text-[11px] leading-relaxed text-slate-400"><input type="checkbox" checked={commentsPolicyAccepted} onChange={event => setCommentsPolicyAccepted(event.target.checked)} className="mt-0.5" /> I agree to the community rules: no harassment, scams, hateful content, private information, illegal content or external links. Report abuse using the flag next to a comment.</label>
           </div>
         </form>
 
         {/* Comments list */}
         <div className="space-y-4 pt-2">
+          {safetyNotice && <p role="status" className="text-xs text-amber-300">{safetyNotice}</p>}
           {comments.length === 0 ? (
             <p className="text-xs text-slate-500 text-center py-4">
               Be the first to share your thoughts on this Nollywood release.
@@ -1247,6 +1269,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       )}
+                      {user?.id !== c.user_id && <><button type="button" onClick={() => setReportTarget({ type: 'comment', id: c.id, label: `Comment by ${c.user_name}` })} aria-label={`Report comment by ${c.user_name}`} title="Report comment" className="text-amber-300 hover:text-amber-200"><Flag className="h-3.5 w-3.5" /></button><button type="button" onClick={() => blockCommentAuthor(c.user_id, c.user_name)} aria-label={`Block ${c.user_name}`} title="Block account" className="text-slate-400 hover:text-rose-300"><Ban className="h-3.5 w-3.5" /></button></>}
                     </div>
                   </div>
                   <p className="text-xs text-slate-300 mt-1 leading-relaxed">{c.comment_text}</p>
@@ -1275,6 +1298,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
                         <div className="mt-2 flex gap-3 text-[11px]">
                           <button type="button" onClick={() => handleCommentReaction(reply.id, 'like')} className="inline-flex items-center gap-1 text-slate-400"><ThumbsUp className="w-3 h-3" /> {reply.likes_count || 0}</button>
                           <button type="button" onClick={() => handleCommentReaction(reply.id, 'dislike')} className="inline-flex items-center gap-1 text-slate-400"><ThumbsDown className="w-3 h-3" /> {reply.dislikes_count || 0}</button>
+                          {user?.id !== reply.user_id && <><button type="button" onClick={() => setReportTarget({ type: 'comment', id: reply.id, label: `Reply by ${reply.user_name}` })} className="inline-flex items-center gap-1 text-amber-300"><Flag className="h-3 w-3" /> Report</button><button type="button" onClick={() => blockCommentAuthor(reply.user_id, reply.user_name)} className="inline-flex items-center gap-1 text-slate-400"><Ban className="h-3 w-3" /> Block</button></>}
                         </div>
                       </div>
                     ))}
@@ -1285,6 +1309,7 @@ export const WatchPlayer: React.FC<WatchPlayerProps> = ({
           )}
         </div>
       </div>
+      {reportTarget && <SafetyReportDialog targetType={reportTarget.type} targetId={reportTarget.id} targetLabel={reportTarget.label} onClose={() => setReportTarget(null)} />}
     </div>
   );
 };

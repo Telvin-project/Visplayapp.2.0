@@ -6,3 +6,9 @@ coverage/
 *.log
 .env*
 !.env.example
+# Never add fresh customer / legacy financial state exports to the repository.
+# Note: a previously tracked data file must be removed from the Git index by
+# the employer through a reviewed change; ignore rules cannot untrack it.
+data/
+*.sql.backup
+*.dump

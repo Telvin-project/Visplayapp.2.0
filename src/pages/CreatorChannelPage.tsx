@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { CreatorProfile, Movie } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { MovieCard } from '../components/MovieCard';
-import { ArrowLeft, UserPlus, UserCheck, Film, Users, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, UserPlus, UserCheck, Film, Users, ShieldCheck, Flag, Ban } from 'lucide-react';
+import { SafetyReportDialog } from '../components/SafetyReportDialog';
 
 interface CreatorChannelPageProps {
   creatorId: string;
@@ -21,6 +22,8 @@ export const CreatorChannelPage: React.FC<CreatorChannelPageProps> = ({
   const [followersCount, setFollowersCount] = useState(0);
   const [isFollowing, setIsFollowing] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [safetyMessage, setSafetyMessage] = useState('');
 
   useEffect(() => {
     fetchChannel();
@@ -58,6 +61,20 @@ export const CreatorChannelPage: React.FC<CreatorChannelPageProps> = ({
     } catch (e) {
       console.error(e);
     }
+  };
+
+  const blockCreator = async () => {
+    if (!user) { openAuthModal('login'); return; }
+    if (!creator) return;
+    if (!window.confirm(`Block ${creator.channel_name}? Their content and messages will be hidden from your account.`)) return;
+    try {
+      const response = await fetch(`/api/safety/blocks/${encodeURIComponent(creator.user_id)}`, { method: 'POST' });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Could not block creator.');
+      setSafetyMessage('Creator blocked. You can unblock them in the Safety Center.');
+      setMovies([]);
+      setIsFollowing(false);
+    } catch (error) { setSafetyMessage(error instanceof Error ? error.message : 'Please retry.'); }
   };
 
   if (loading) {
@@ -146,7 +163,13 @@ export const CreatorChannelPage: React.FC<CreatorChannelPageProps> = ({
               </>
             )}
           </button>
+          <div className="flex flex-wrap items-center justify-center gap-2 sm:justify-start">
+            <button onClick={() => setReportOpen(true)} className="flex items-center gap-1.5 rounded-xl border border-slate-700 px-3 py-2 text-xs text-amber-300"><Flag className="h-4 w-4" /> Report creator</button>
+            {user?.id !== creator.user_id && <button onClick={blockCreator} className="flex items-center gap-1.5 rounded-xl border border-slate-700 px-3 py-2 text-xs text-slate-300"><Ban className="h-4 w-4" /> Block creator</button>}
+          </div>
         </div>
+
+        {safetyMessage && <p role="status" className="px-6 pb-3 text-xs text-amber-300">{safetyMessage}</p>}
 
         {creator.description && (
           <div className="px-6 sm:px-8 pb-6 border-t border-slate-800/60 pt-4">
@@ -154,6 +177,7 @@ export const CreatorChannelPage: React.FC<CreatorChannelPageProps> = ({
           </div>
         )}
       </div>
+      {reportOpen && <SafetyReportDialog targetType="creator" targetId={creator.id} targetLabel={creator.channel_name} onClose={() => setReportOpen(false)} />}
 
       {/* Movies from this Channel */}
       <div className="space-y-4">
