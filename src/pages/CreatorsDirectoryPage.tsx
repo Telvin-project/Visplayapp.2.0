@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { CreatorProfile } from '../types';
 import { Users, ShieldCheck, Film, ArrowRight } from 'lucide-react';
+import { isMobileReader } from '../lib/distribution';
 
 interface CreatorsDirectoryPageProps {
   onSelectCreator: (id: string) => void;
@@ -11,6 +12,7 @@ export const CreatorsDirectoryPage: React.FC<CreatorsDirectoryPageProps> = ({
   onSelectCreator,
   onOpenApply,
 }) => {
+  const readerMode = isMobileReader();
   const [creators, setCreators] = useState<CreatorProfile[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -45,16 +47,16 @@ export const CreatorsDirectoryPage: React.FC<CreatorsDirectoryPageProps> = ({
             Nollywood & African Creators
           </h1>
           <p className="text-xs text-slate-300 max-w-xl">
-            Explore authentic creator studios distributing independent films directly to African audiences on VisPlay with 85% creator revenue share.
+            {readerMode ? 'Explore independent filmmakers and their movies on VisPlay.' : 'Explore authentic creator studios distributing independent films directly to African audiences on VisPlay with 85% creator revenue share.'}
           </p>
         </div>
 
-        <button
+        {!readerMode && <button
           onClick={onOpenApply}
           className="py-3 px-5 rounded-xl text-xs font-bold bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 text-white shadow-lg shrink-0"
         >
           Join as Creator (Apply Now)
-        </button>
+        </button>}
       </div>
 
       {loading ? (
@@ -93,7 +95,7 @@ export const CreatorsDirectoryPage: React.FC<CreatorsDirectoryPageProps> = ({
               )}
 
               <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between text-xs text-slate-300">
-                <span className="text-[11px] text-emerald-400 font-medium">85% Creator Share</span>
+                <span className="text-[11px] text-emerald-400 font-medium">{readerMode ? 'Featured filmmaker' : '85% Creator Share'}</span>
                 <span className="flex items-center gap-1 text-cyan-400 group-hover:translate-x-1 transition-transform font-semibold">
                   <span>Visit Channel</span>
                   <ArrowRight className="w-3.5 h-3.5" />

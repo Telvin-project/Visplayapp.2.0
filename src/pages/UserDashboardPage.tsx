@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Movie, EpisodeBundle, WalletTransaction, CreatorProfile, Notification } from '../types';
 import { MovieCard } from '../components/MovieCard';
+import { isMobileReader, safeHomePath } from '../lib/distribution';
 import {
   FolderLock,
   Coins,
@@ -22,15 +23,18 @@ interface UserDashboardPageProps {
   onSelectMovie: (id: string) => void;
   onSelectCreator: (id: string) => void;
   onSelectBundle: (id: string) => void;
+  requestedTab?: 'profile' | 'library';
 }
 
 export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
   onSelectMovie,
   onSelectCreator,
   onSelectBundle,
+  requestedTab = 'library',
 }) => {
+  const readerMode = isMobileReader();
   const { user, updateProfile, openDepositModal, refreshUser, openCreatorApplyModal, creatorProfile, openAuthModal, logout } = useAuth();
-  const [activeTab, setActiveTab] = useState<'library' | 'history' | 'wallet' | 'creators' | 'notifications' | 'profile'>(() => new URLSearchParams(window.location.search).get('account-deletion') === '1' ? 'profile' : 'library');
+  const [activeTab, setActiveTab] = useState<'library' | 'history' | 'wallet' | 'creators' | 'notifications' | 'profile'>(() => new URLSearchParams(window.location.search).get('account-deletion') === '1' || requestedTab === 'profile' ? 'profile' : 'library');
   const [libraryData, setLibraryData] = useState<any>(null);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
@@ -43,6 +47,11 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
   const [profileMessage, setProfileMessage] = useState<string | null>(null);
   const [deletingAccount, setDeletingAccount] = useState(false);
   const [deleteAccountError, setDeleteAccountError] = useState<string | null>(null);
+  const [deleteConfirmationText, setDeleteConfirmationText] = useState('');
+
+  useEffect(() => {
+    if (requestedTab === 'profile') setActiveTab('profile');
+  }, [requestedTab]);
 
   useEffect(() => {
     if (user) {
@@ -93,8 +102,12 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
 
   const handleDeleteAccount = async () => {
     setDeleteAccountError(null);
+    if (deleteConfirmationText !== 'DELETE') {
+      setDeleteAccountError('Type DELETE in the confirmation field before continuing.');
+      return;
+    }
     const confirmed = window.confirm(
-      'Permanently delete your VisPlay account? Your profile, comments, follows, watch history, and any creator content you uploaded will be removed. Any remaining wallet balance will be lost. Necessary financial records may be retained in anonymized form. This cannot be undone.'
+      'Permanently delete your VisPlay account? Your profile, comments, follows, watch history and eligible creator uploads will be removed. Deletion cannot proceed with a positive wallet balance or unsettled creator obligations. Necessary financial records may be retained without direct account identifiers. This cannot be undone.'
     );
     if (!confirmed) return;
 
@@ -112,7 +125,7 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
         return;
       }
       await logout();
-      window.location.assign('/');
+      window.location.assign(safeHomePath());
     } catch (error: any) {
       setDeleteAccountError(error?.message || 'Network error. Your account has not been confirmed as deleted.');
     } finally {
@@ -161,24 +174,21 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
               <span className="text-[10px] font-bold uppercase bg-slate-800 text-cyan-300 px-2 py-0.5 rounded">
                 {user?.role}
               </span>
-              <span className="text-slate-500">·</span>
-              <span className="text-slate-400 font-mono">
-                Balance: <strong className="text-cyan-300">₦{(user?.wallet_balance || 0).toLocaleString()}</strong>
-              </span>
+              {!readerMode && <><span className="text-slate-500">·</span><span className="text-slate-400 font-mono">Balance: <strong className="text-cyan-300">₦{(user?.wallet_balance || 0).toLocaleString()}</strong></span></>}
             </div>
           </div>
         </div>
 
         <div className="flex items-center gap-2.5">
-          <button
+          {!readerMode && <button
             onClick={() => openDepositModal()}
             className="py-2.5 px-4 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-1.5"
           >
             <Plus className="w-3.5 h-3.5" />
             <span>Fund Wallet</span>
-          </button>
+          </button>}
 
-          {creatorProfile?.status !== 'approved' && (
+          {!readerMode && creatorProfile?.status !== 'approved' && (
             <button
               onClick={openCreatorApplyModal}
               className="py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-fuchsia-300 border border-fuchsia-900/50 rounded-xl text-xs font-bold transition-all"
@@ -194,7 +204,7 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
         {[
           { id: 'library', label: `Unlocked Movies (${unlockedMovies.length})` },
           { id: 'history', label: `Watch History (${watchHistory.length})` },
-          { id: 'wallet', label: 'Wallet & Payment History' },
+          ...(!readerMode ? [{ id: 'wallet', label: 'Wallet & Payment History' }] : []),
           { id: 'creators', label: `Followed Creators (${followedCreators.length})` },
           { id: 'notifications', label: `Notifications (${notifications.filter(n => !n.is_read).length})` },
           { id: 'profile', label: 'Account Profile' },
@@ -221,7 +231,7 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
               <FolderLock className="w-10 h-10 text-slate-500 mx-auto" />
               <h3 className="text-base font-bold text-white">No Movies Unlocked Yet</h3>
               <p className="text-xs text-slate-400 max-w-sm mx-auto">
-                Explore the homepage, watch 5-minute previews free, and unlock any full Nollywood blockbuster for ₦100 coins!
+                {readerMode ? 'Explore films and enjoy free previews. Previously acquired films appear here after you sign in.' : 'Explore the homepage, watch 5-minute previews free, and unlock a full Nollywood film with VisPlay coins.'}
               </p>
             </div>
           ) : (
@@ -267,7 +277,7 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
       )}
 
       {/* ---------------- TAB 2: WALLET TRANSACTIONS ---------------- */}
-      {activeTab === 'wallet' && (
+      {!readerMode && activeTab === 'wallet' && (
         <div className="space-y-6">
           <div className="p-6 bg-[#0d121d] border border-slate-800 rounded-3xl flex flex-col sm:flex-row items-center justify-between gap-4">
             <div>
@@ -418,8 +428,13 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
             <div>
               <h4 className="text-sm font-bold text-red-300">Delete Account</h4>
               <p className="mt-1 text-xs leading-relaxed text-slate-400">
-                Permanently remove your VisPlay account and associated personal data. Creator uploads and comments may also be removed. Financial records required for accounting or fraud prevention may be retained in anonymized form. Any unused wallet balance will be lost.
+                Permanently remove your VisPlay account and eligible personal data, including comments, follows and viewing history. We cannot complete deletion while you have a positive wallet balance or unsettled creator rights; these must be resolved through VisPlay support first. Certain accounting, dispute or legal records may be retained in anonymized form.
               </p>
+            </div>
+            <div>
+              <label htmlFor="confirm-account-deletion" className="block text-xs font-semibold text-red-200 mb-2">Type DELETE to confirm your request</label>
+              <input id="confirm-account-deletion" type="text" value={deleteConfirmationText} onChange={e => setDeleteConfirmationText(e.target.value)} autoComplete="off" autoCapitalize="characters" spellCheck={false} placeholder="DELETE" aria-describedby="deletion-confirmation-help" className="w-full rounded-xl border border-red-800 bg-slate-950 px-4 py-3 text-sm text-white focus-visible:outline-2 focus-visible:outline-cyan-300" />
+              <p id="deletion-confirmation-help" className="mt-2 text-xs text-slate-400">This action cannot be undone. If deletion is blocked, your account remains active while the outstanding issue is resolved.</p>
             </div>
             {deleteAccountError && (
               <div role="alert" className="rounded-xl border border-red-800 bg-red-950/50 p-3 text-xs text-red-200">
@@ -429,7 +444,7 @@ export const UserDashboardPage: React.FC<UserDashboardPageProps> = ({
             <button
               type="button"
               onClick={handleDeleteAccount}
-              disabled={deletingAccount}
+              disabled={deletingAccount || deleteConfirmationText !== 'DELETE'}
               className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-red-700/70 bg-red-950/40 px-4 py-3 text-xs font-bold text-red-200 transition-colors hover:bg-red-900/60 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Trash2 className="h-4 w-4" />

@@ -1,0 +1,41 @@
+{
+  "_instructions": "SYNTHETIC EXAMPLE ONLY. Delete this explanatory field or leave it; replace ALL sample rows with independently exported, reconciled STAGING evidence. NEVER use this file to approve production migration or actual payouts.",
+  "ledger": {
+    "payments": [
+      {
+        "reference": "VIS_EXAMPLE_0001",
+        "amount_ngn": 100,
+        "status": "successful",
+        "payment_method": "paystack"
+      }
+    ],
+    "payouts": [
+      {
+        "id": "PAYOUT_EXAMPLE_0001",
+        "net_payout_ngn": 85,
+        "status": "paid"
+      }
+    ],
+    "refund_cases": []
+  },
+  "provider": {
+    "payments": [
+      {
+        "reference": "VIS_EXAMPLE_0001",
+        "amount_kobo": 10000,
+        "currency": "NGN",
+        "status": "success"
+      }
+    ]
+  },
+  "bank": {
+    "payouts": [
+      {
+        "payout_id": "PAYOUT_EXAMPLE_0001",
+        "reference": "BANK_EXAMPLE_0001",
+        "amount_ngn": 85,
+        "status": "success"
+      }
+    ]
+  }
+}

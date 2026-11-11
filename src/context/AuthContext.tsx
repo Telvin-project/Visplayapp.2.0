@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { User, CreatorProfile } from '../types';
 import {
   getSupabaseClient,
@@ -9,6 +9,7 @@ import {
   clearCustomSupabaseCredentials,
   getSupabaseCredentials,
 } from '../lib/supabase';
+import { safeHomePath } from '../lib/distribution';
 
 interface AuthContextType {
   user: User | null;
@@ -17,7 +18,7 @@ interface AuthContextType {
   authLoading: boolean;
   login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
   loginWithGoogle: () => Promise<{ success: boolean; error?: string }>;
-  register: (email: string, password: string, fullName: string, phone?: string) => Promise<{ success: boolean; error?: string }>;
+  register: (email: string, password: string, fullName: string, phone?: string) => Promise<{ success: boolean; error?: string; verification_required?: boolean }>;
   logout: () => Promise<void>;
   updateProfile: (data: { full_name?: string; phone?: string; avatar_url?: string }) => Promise<{ success: boolean; error?: string }>;
   refreshUser: () => Promise<void>;
@@ -51,6 +52,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [creatorProfile, setCreatorProfile] = useState<CreatorProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [authLoading, setAuthLoading] = useState(false);
+  const registrationInProgress = useRef(false);
   const [isSupabaseActive, setIsSupabaseActive] = useState(isSupabaseConfigured());
   const [supabaseConfig, setSupabaseConfig] = useState(getSupabaseCredentials());
 
@@ -91,8 +93,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
-  const syncSupabaseSession = useCallback(async (supabaseUser: any, accessToken: string) => {
-    if (!supabaseUser?.email || !accessToken) return;
+  const syncSupabaseSession = useCallback(async (supabaseUser: any, accessToken: string): Promise<{ success: boolean; error?: string }> => {
+    if (!supabaseUser?.email || !supabaseUser.email_confirmed_at || !accessToken) {
+      return { success: false, error: 'Please verify your email address before signing in.' };
+    }
     try {
       setAuthLoading(true);
       const res = await fetch('/api/auth/supabase-sync', {
@@ -115,9 +119,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           window.history.replaceState(null, '', window.location.pathname + window.location.search);
         }
         setAuthModalOpen(false);
+        return { success: true };
       }
+      const data = await res.json().catch(() => ({}));
+      return { success: false, error: data.error || 'Could not finish securing your VisPlay session.' };
     } catch (err) {
       console.error('Error synchronizing Supabase session with backend:', err);
+      return { success: false, error: 'Unable to connect to VisPlay. Please try again.' };
     } finally {
       setAuthLoading(false);
     }
@@ -137,6 +145,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
 
       const { data: { subscription } } = client.auth.onAuthStateChange(async (event, session) => {
+        // When a provider is misconfigured to sign users in during sign-up,
+        // never auto-create a VisPlay account from that registration event.
+        if (registrationInProgress.current) return;
         if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') && session?.user) {
           await syncSupabaseSession(session.user, session.access_token);
         } else if (event === 'SIGNED_OUT') {
@@ -177,20 +188,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const login = async (email: string, password: string) => {
     setAuthLoading(true);
     try {
-      const res = await fetch('/api/auth/login', {
-        credentials: 'include',
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+      const client = getSupabaseClient();
+      if (!client) return { success: false, error: 'Verified sign-in is not configured. Please contact support.' };
+
+      const { data, error } = await client.auth.signInWithPassword({
+        email: email.trim().toLowerCase(),
+        password,
       });
-      const data = await res.json();
-      if (!res.ok) {
-        return { success: false, error: data.error || 'Login failed' };
+      if (error) return { success: false, error: error.message || 'Invalid email or password.' };
+
+      if (!data.user?.email_confirmed_at || !data.session?.access_token) {
+        await client.auth.signOut();
+        return { success: false, error: 'Please verify your email using the link we sent before signing in.' };
       }
-      setUser(data.user);
-      await refreshUser();
-      setAuthModalOpen(false);
-      return { success: true };
+
+      const synced = await syncSupabaseSession(data.user, data.session.access_token);
+      if (!synced.success) await client.auth.signOut();
+      return synced;
     } catch (err: any) {
       return { success: false, error: err.message || 'Network error' };
     } finally {
@@ -200,41 +214,39 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const register = async (email: string, password: string, fullName: string, phone?: string) => {
     setAuthLoading(true);
+    registrationInProgress.current = true;
     try {
-      const res = await fetch('/api/auth/register', {
-        credentials: 'include',
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password, full_name: fullName, phone }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        return { success: false, error: data.error || 'Registration failed' };
-      }
-
-      // If Supabase is configured, also register on Supabase Auth in background
       const client = getSupabaseClient();
-      if (client) {
-        try {
-          await client.auth.signUp({
-            email,
-            password,
-            options: {
-              data: { full_name: fullName, phone },
-            },
-          });
-        } catch (supabaseErr) {
-          console.warn('Optional Supabase signup sync note:', supabaseErr);
-        }
+      if (!client) return { success: false, error: 'Verified registration is not configured. Please contact support.' };
+      if (password.length < 12) return { success: false, error: 'Use a password of at least 12 characters.' };
+      if (!fullName.trim() || fullName.trim().length > 120) {
+        return { success: false, error: 'Enter your full name (up to 120 characters).' };
       }
 
-      setUser(data.user);
-      await refreshUser();
-      setAuthModalOpen(false);
-      return { success: true };
+      const { data, error } = await client.auth.signUp({
+        email: email.trim().toLowerCase(),
+        password,
+        options: {
+          emailRedirectTo: window.location.origin + safeHomePath(),
+          data: { full_name: fullName.trim(), phone: phone?.trim() || '' },
+        },
+      });
+      if (error) return { success: false, error: error.message || 'Registration could not be completed.' };
+
+      // A Supabase session here means email confirmation is disabled. Reject it
+      // and require operators to enable Confirm email in Supabase Auth settings.
+      if (data.session) {
+        await client.auth.signOut();
+        return { success: false, error: 'Email verification is not enabled. Please contact VisPlay support.' };
+      }
+
+      // Do not create a VisPlay session, wallet or viewer account until the
+      // email link has been verified and /api/auth/supabase-sync succeeds.
+      return { success: true, verification_required: true };
     } catch (err: any) {
       return { success: false, error: err.message || 'Network error' };
     } finally {
+      registrationInProgress.current = false;
       setAuthLoading(false);
     }
   };

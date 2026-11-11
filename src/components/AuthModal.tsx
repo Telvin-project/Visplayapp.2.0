@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { isMobileReader } from '../lib/distribution';
 import {
   X,
   Lock,
@@ -8,9 +9,11 @@ import {
   Phone,
   AlertCircle,
   Loader2,
+  CheckCircle2,
 } from 'lucide-react';
 
 export const AuthModal: React.FC = () => {
+  const readerMode = isMobileReader();
   const {
     authModalOpen,
     authModalMode,
@@ -27,6 +30,7 @@ export const AuthModal: React.FC = () => {
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
   const [localSubmitting, setLocalSubmitting] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
 
@@ -36,6 +40,7 @@ export const AuthModal: React.FC = () => {
 
   const handleGoogleSignIn = async () => {
     setError(null);
+    setInfo(null);
     setGoogleLoading(true);
     const res = await loginWithGoogle();
     if (!res.success) {
@@ -47,6 +52,7 @@ export const AuthModal: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setInfo(null);
     setLocalSubmitting(true);
 
     if (authModalMode === 'login') {
@@ -63,6 +69,9 @@ export const AuthModal: React.FC = () => {
       const res = await register(email, password, fullName, phone);
       if (!res.success) {
         setError(res.error || 'Registration failed. Try again.');
+      } else if (res.verification_required) {
+        setPassword('');
+        setInfo('Check your email for a verification link. Your VisPlay account will be available after you confirm your address, then sign in.');
       }
     }
     setLocalSubmitting(false);
@@ -88,7 +97,7 @@ export const AuthModal: React.FC = () => {
         </div>
 
         {/* GOOGLE SIGN-IN BUTTON */}
-        <div className="mb-5">
+        {!readerMode && <div className="mb-5">
           <button
             type="button"
             onClick={handleGoogleSignIn}
@@ -119,22 +128,22 @@ export const AuthModal: React.FC = () => {
             )}
             <span>{googleLoading ? 'Connecting to Google OAuth...' : 'Continue with Google'}</span>
           </button>
-        </div>
+        </div>}
 
         {/* Divider */}
-        <div className="relative flex items-center justify-center mb-5">
+        {!readerMode && <div className="relative flex items-center justify-center mb-5">
           <div className="border-t border-slate-800 w-full" />
           <span className="bg-[#0d121d] px-3 text-[10px] font-semibold tracking-wider text-slate-500 uppercase">
             Or with email
           </span>
           <div className="border-t border-slate-800 w-full" />
-        </div>
+        </div>}
 
         {/* Tab switch */}
         <div className="flex p-1 bg-slate-900/80 rounded-xl mb-5 border border-slate-800">
           <button
             type="button"
-            onClick={() => { setError(null); openAuthModal('login'); }}
+            onClick={() => { setError(null); setInfo(null); openAuthModal('login'); }}
             className={`flex-1 py-2 text-xs font-semibold rounded-lg transition-all ${
               authModalMode === 'login'
                 ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-md'
@@ -145,7 +154,7 @@ export const AuthModal: React.FC = () => {
           </button>
           <button
             type="button"
-            onClick={() => { setError(null); openAuthModal('register'); }}
+            onClick={() => { setError(null); setInfo(null); openAuthModal('register'); }}
             className={`flex-1 py-2 text-xs font-semibold rounded-lg transition-all ${
               authModalMode === 'register'
                 ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-md'
@@ -160,6 +169,13 @@ export const AuthModal: React.FC = () => {
           <div className="mb-4 p-3 bg-rose-950/60 border border-rose-800/80 rounded-xl text-rose-300 text-xs flex items-center gap-2">
             <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
             <span>{error}</span>
+          </div>
+        )}
+
+        {info && (
+          <div role="status" className="mb-4 p-3 bg-emerald-950/60 border border-emerald-800/80 rounded-xl text-emerald-200 text-xs flex items-start gap-2">
+            <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+            <span>{info}</span>
           </div>
         )}
 
@@ -181,11 +197,12 @@ export const AuthModal: React.FC = () => {
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1.5">Nigerian Phone (Optional)</label>
+                <label className="block text-xs font-medium text-slate-300 mb-1.5">Phone (Optional, international format)</label>
                 <div className="relative">
                   <Phone className="absolute left-3.5 top-3 w-4 h-4 text-slate-500" />
                   <input
                     type="tel"
+                    autoComplete="tel"
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
                     placeholder="+234 800 000 0000"
@@ -203,6 +220,8 @@ export const AuthModal: React.FC = () => {
               <input
                 type="email"
                 required
+                autoComplete="email"
+                autoCapitalize="none"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="name@example.com"
@@ -218,11 +237,16 @@ export const AuthModal: React.FC = () => {
               <input
                 type="password"
                 required
+                minLength={authModalMode === 'register' ? 12 : undefined}
+                autoComplete={authModalMode === 'register' ? 'new-password' : 'current-password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
                 className="w-full pl-10 pr-4 py-2.5 bg-slate-900/90 border border-slate-800 rounded-xl text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 transition-all"
               />
+              {authModalMode === 'register' && (
+                <p className="mt-1.5 text-xs text-slate-400">At least 12 characters. We will email you a verification link.</p>
+              )}
             </div>
           </div>
 

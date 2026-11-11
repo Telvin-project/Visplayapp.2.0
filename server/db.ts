@@ -1,19 +1,23 @@
 import fs from 'fs';
 import path from 'path';
-import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 export interface User {
   id: string;
   email: string;
   password_hash: string;
+  // Set only after a controlled migration or when the verified identity is created.
+  // Legacy users without this binding must not inherit privileges by email alone.
+  supabase_auth_id?: string;
   full_name: string;
   avatar_url: string;
   role: 'viewer' | 'creator' | 'admin';
   wallet_balance: number;
   phone?: string;
   created_at: string;
+  /** Disables new social participation, but never revokes wallets or entitlements. */
+  safety_restricted?: boolean;
 }
 
 export interface CreatorProfile {
@@ -28,6 +32,7 @@ export interface CreatorProfile {
   submitted_at: string;
   reviewed_at?: string;
   review_notes?: string;
+  safety_restricted?: boolean;
 }
 
 export interface Movie {
@@ -43,6 +48,8 @@ export interface Movie {
   poster_url: string;
   backdrop_url: string;
   video_url: string;
+  /** Private R2 key for a transcoded <=300s preview; never return in API JSON. */
+  preview_private_key?: string;
   is_bundle_only: boolean;
   bundle_id?: string;
   episode_number?: number;
@@ -52,6 +59,25 @@ export interface Movie {
   price_ngn: number; // Always 100
   free_preview_seconds: number; // Always 300 (5 mins)
   created_at: string;
+  /** A reversible distribution hold; existing paid entitlements remain recorded. */
+  safety_hold?: boolean;
+  content_rating?: 'GENERAL' | 'PARENTAL_GUIDANCE' | 'TEEN' | 'ADULT';
+  content_rating_reviewed_at?: string;
+  rights_attestation?: {
+    declared_at: string;
+    actor_user_id: string;
+    basis: 'original' | 'licensed' | 'authorized';
+    rights_holder: string;
+    evidence_reference?: string;
+    policy_version: '2026-11-11';
+  };
+  rights_review?: {
+    reviewed_at: string;
+    reviewer_user_id: string;
+    verification_basis: 'original' | 'licence' | 'written_authorization' | 'other';
+    evidence_reference: string;
+    review_notes: string;
+  };
 }
 
 export interface EpisodeBundle {
@@ -71,7 +97,7 @@ export interface WalletTransaction {
   user_id: string;
   amount_ngn: number;
   type: 'deposit' | 'purchase' | 'earning' | 'payout';
-  status: 'successful' | 'pending' | 'failed';
+  status: 'successful' | 'pending' | 'failed' | 'refund_required';
   reference: string;
   payment_method: 'paystack' | 'flutterwave' | 'wallet';
   description: string;
@@ -98,7 +124,7 @@ export interface CreatorLedger {
   gross_amount_ngn: number;
   creator_share_ngn: number; // 85%
   platform_fee_ngn: number; // 15%
-  status: 'accrued' | 'paid';
+  status: 'accrued' | 'reserved' | 'paid';
   payout_id?: string;
   created_at: string;
 }
@@ -129,6 +155,46 @@ export interface Comment {
   likes_count: number;
   created_at: string;
   updated_at?: string;
+  moderation_hidden?: boolean;
+  content_rules_accepted_version?: '2026-11-11';
+}
+
+export type SafetyTarget = 'movie' | 'comment' | 'creator' | 'user';
+export type SafetyReason = 'spam' | 'harassment' | 'hate' | 'sexual_content' | 'violence' | 'copyright' | 'privacy' | 'other';
+export interface SafetyReport {
+  id: string;
+  reporter_user_id: string;
+  target_type: SafetyTarget;
+  target_id: string;
+  reason: SafetyReason;
+  description: string;
+  status: 'open' | 'reviewing' | 'actioned' | 'dismissed';
+  created_at: string;
+  reviewed_at?: string;
+  reviewer_user_id?: string;
+  decision_note?: string;
+  enforcement_action?: 'none' | 'hide_comment' | 'hold_movie' | 'restrict_creator' | 'restrict_user';
+}
+
+export interface UserBlock {
+  id: string;
+  blocker_user_id: string;
+  blocked_user_id: string;
+  created_at: string;
+}
+
+export interface SafetyAppeal {
+  id: string;
+  report_id: string;
+  appellant_user_id: string;
+  statement: string;
+  status: 'open' | 'reviewing' | 'upheld' | 'rejected';
+  created_at: string;
+  reviewed_at?: string;
+  reviewer_user_id?: string;
+  decision_note?: string;
+  restored_at?: string;
+  restoration_reviewer_user_id?: string;
 }
 
 export interface Like {
@@ -215,6 +281,7 @@ export interface AuditLog {
   target_type: string;
   target_id: string;
   details: string;
+  ip_address?: string;
   created_at: string;
 }
 
@@ -247,55 +314,83 @@ export interface DatabaseSchema {
   ads: AdCampaign[];
   audit_logs: AuditLog[];
   notifications: Notification[];
+  safety_reports?: SafetyReport[];
+  safety_blocks?: UserBlock[];
+  safety_appeals?: SafetyAppeal[];
   featured_movie_id?: string | null;
   featured_movie_backdrop?: string | null;
   demo_balances_cleared?: boolean;
 }
 
-const DB_FILE = path.join(process.cwd(), 'data', 'visplay_db.json');
+// Resolve only when used so isolated tests may chdir into a disposable folder.
+// No test may ever rewrite the repository's original user/financial snapshot.
+const databaseFile = () => path.join(process.cwd(), 'data', 'visplay_db.json');
 const SUPABASE_TABLE = 'visplay_app_state';
 
+// Explicit PostgREST table shape prevents current Supabase type inference from
+// producing `never` for reads and upserts. This does not replace a normalized
+// financial database (addressed in the next remediation sections).
+type VisPlayStateDatabase = {
+  public: {
+    Tables: {
+      visplay_app_state: {
+        Row: { id: string; data: DatabaseSchema; updated_at: string; revision: number };
+        Insert: { id: string; data: DatabaseSchema; updated_at?: string; revision?: number };
+        Update: { id?: string; data?: DatabaseSchema; updated_at?: string; revision?: number };
+        Relationships: [];
+      };
+    };
+    Views: {};
+    Functions: {
+      visplay_commit_app_state: {
+        Args: { p_expected_revision: number; p_data: DatabaseSchema };
+        Returns: number;
+      };
+    };
+    Enums: {};
+    CompositeTypes: {};
+  };
+};
+
 let dbCache: DatabaseSchema | null = null;
-let supabaseClient: ReturnType<typeof createClient> | null = null;
+let dbRevision = 0;
+const snapshotRevisions = new WeakMap<DatabaseSchema, number>();
+let supabaseClient: SupabaseClient<VisPlayStateDatabase> | null = null;
 let persistenceQueue: Promise<void> = Promise.resolve();
+
+export class AppStateConflictError extends Error {
+  constructor() {
+    super('Application state changed while this request was in progress. Refresh and retry.');
+    this.name = 'AppStateConflictError';
+  }
+}
 
 function getSupabaseClient() {
   if (supabaseClient) return supabaseClient;
   const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !serviceRoleKey) return null;
-  supabaseClient = createClient(url, serviceRoleKey, {
+  supabaseClient = createClient<VisPlayStateDatabase>(url, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
   return supabaseClient;
 }
 
 /**
- * Remove the matching Supabase Auth identity using the server-only service-role client.
- * Returns false when the email has no Supabase Auth identity (e.g. a local-password account).
+ * Delete exactly the verified Supabase Auth identity bound to the VisPlay account.
+ * Never search by email: the same address may have belonged to a legacy account,
+ * or may change ownership after a provider-side email update.
  */
-export async function deleteSupabaseAuthUserByEmail(email: string): Promise<boolean> {
+export async function deleteSupabaseAuthUserById(authId: string): Promise<void> {
+  if (!/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(authId)) {
+    throw new Error('Account is not bound to a verified Supabase identity.');
+  }
   const client = getSupabaseClient();
   if (!client) {
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error('Supabase admin access is not configured; account deletion cannot be completed safely.');
-    }
-    return false;
+    throw new Error('Supabase admin access is not configured; account deletion cannot be completed safely.');
   }
-
-  const targetEmail = email.trim().toLowerCase();
-  for (let page = 1; page <= 100; page += 1) {
-    const { data, error } = await client.auth.admin.listUsers({ page, perPage: 1000 });
-    if (error) throw new Error('Could not verify the Supabase account for deletion: ' + error.message);
-    const match = data.users.find(user => user.email?.toLowerCase() === targetEmail);
-    if (match) {
-      const { error: deleteError } = await client.auth.admin.deleteUser(match.id);
-      if (deleteError) throw new Error('Could not delete the Supabase sign-in identity: ' + deleteError.message);
-      return true;
-    }
-    if (data.users.length < 1000) return false;
-  }
-  throw new Error('Could not safely locate the Supabase account for deletion.');
+  const { error } = await client.auth.admin.deleteUser(authId);
+  if (error) throw new Error('Could not delete the Supabase sign-in identity: ' + error.message);
 }
 
 /**
@@ -316,6 +411,7 @@ export async function verifySupabaseAccessToken(accessToken: string) {
 /** Load the complete application state before accepting requests. */
 export async function initializeDatabase(): Promise<void> {
   const client = getSupabaseClient();
+  const DB_FILE = databaseFile();
   if (!client) {
     if (process.env.NODE_ENV === 'production') {
       throw new Error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY; refusing to start without persistent storage.');
@@ -326,10 +422,11 @@ export async function initializeDatabase(): Promise<void> {
       dbCache = getInitialSeed();
       saveLocalDatabase(dbCache);
     }
+    dbRevision = 0;
     return;
   }
 
-  const { data: row, error } = await client.from(SUPABASE_TABLE).select('data').eq('id', 'main').maybeSingle();
+  const { data: row, error } = await client.from(SUPABASE_TABLE).select('data,revision').eq('id', 'main').maybeSingle();
   if (error) throw new Error('Unable to load VisPlay state from Supabase: ' + error.message);
 
   if (row?.data) {
@@ -337,7 +434,11 @@ export async function initializeDatabase(): Promise<void> {
     if (!state.users || !state.creator_profiles || !state.movies || !state.transactions) {
       throw new Error('Supabase VisPlay state has an unexpected format; refusing to overwrite it.');
     }
+    if (!Number.isSafeInteger(row.revision) || row.revision < 0) {
+      throw new Error('App-state revision migration is required before starting VisPlay.');
+    }
     dbCache = state;
+    dbRevision = row.revision;
     return;
   }
 
@@ -356,18 +457,43 @@ export async function initializeDatabase(): Promise<void> {
   }
 
   if (!dbCache) throw new Error('VisPlay database state was not initialized.');
-  const { error: writeError } = await client.from(SUPABASE_TABLE).upsert({
-    id: 'main', data: dbCache, updated_at: new Date().toISOString(),
+  const { error: writeError } = await client.from(SUPABASE_TABLE).insert({
+    id: 'main', data: dbCache, updated_at: new Date().toISOString(), revision: 0,
   });
   if (writeError) throw new Error('Unable to migrate the existing VisPlay database to Supabase: ' + writeError.message);
+  dbRevision = 0;
 }
 
 export function loadDatabase(): DatabaseSchema {
   if (!dbCache) throw new Error('VisPlay database has not been initialized. Await initializeDatabase() before serving requests.');
-  return dbCache;
+  // Never give a route the live cache object: a request that later fails to
+  // persist must not become visible to subsequent requests in this process.
+  const snapshot = structuredClone(dbCache);
+  snapshotRevisions.set(snapshot, dbRevision);
+  return snapshot;
+}
+
+/** Refresh before production API requests so another instance's newer
+ * revisions are not silently ignored. Still an interim bridge, not SQL RLS. */
+export async function refreshDatabase(): Promise<void> {
+  const client = getSupabaseClient();
+  if (!client) {
+    if (process.env.NODE_ENV === 'production') throw new Error('Production state database is unavailable.');
+    return;
+  }
+  const { data: row, error } = await client.from(SUPABASE_TABLE).select('data,revision').eq('id', 'main').maybeSingle();
+  if (error || !row || !Number.isSafeInteger(row.revision) || row.revision < 0 ||
+    !Array.isArray(row.data?.users) || !Array.isArray(row.data?.movies)) {
+    throw new Error('Application-state snapshot is unavailable or invalid.');
+  }
+  if (row.revision > dbRevision) {
+    dbCache = row.data;
+    dbRevision = row.revision;
+  }
 }
 
 function saveLocalDatabase(data: DatabaseSchema): void {
+  const DB_FILE = databaseFile();
   if (!fs.existsSync(path.dirname(DB_FILE))) fs.mkdirSync(path.dirname(DB_FILE), { recursive: true });
   const tempPath = `${DB_FILE}.tmp.${Date.now()}`;
   fs.writeFileSync(tempPath, JSON.stringify(data, null, 2), 'utf-8');
@@ -375,37 +501,41 @@ function saveLocalDatabase(data: DatabaseSchema): void {
 }
 
 export async function saveDatabase(data: DatabaseSchema): Promise<void> {
-  dbCache = data;
-  const client = getSupabaseClient();
-  if (!client) {
-    saveLocalDatabase(data);
-    return;
-  }
+  const expectedRevision = snapshotRevisions.get(data);
+  if (expectedRevision === undefined) throw new AppStateConflictError();
   const snapshot = JSON.parse(JSON.stringify(data)) as DatabaseSchema;
-  persistenceQueue = persistenceQueue.then(async () => {
-    const { error } = await client.from(SUPABASE_TABLE).upsert({
-      id: 'main', data: snapshot, updated_at: new Date().toISOString(),
-    });
-    if (error) throw new Error('Unable to save VisPlay state to Supabase: ' + error.message);
+  const attempt = persistenceQueue.then(async () => {
+    if (expectedRevision !== dbRevision) throw new AppStateConflictError();
+    const client = getSupabaseClient();
+    if (!client) {
+      if (process.env.NODE_ENV === 'production') throw new Error('Production state database is unavailable.');
+      saveLocalDatabase(snapshot);
+    } else {
+      const { data: newRevision, error } = await client.rpc('visplay_commit_app_state', {
+        p_expected_revision: expectedRevision, p_data: snapshot,
+      });
+      if (error) {
+        // Another server could have committed first. Refresh the cached state
+        // and return an error. Never retry by overwriting the other writer.
+        await refreshDatabase().catch(() => undefined);
+        if (error.message?.includes('VISPLAY_STATE_CONFLICT')) throw new AppStateConflictError();
+        throw new Error('Unable to commit application state. Check SQL migration and persistence availability.');
+      }
+      if (newRevision !== expectedRevision + 1) throw new Error('Application-state commit returned an invalid revision.');
+    }
+    dbCache = snapshot;
+    dbRevision = expectedRevision + 1;
   });
-  await persistenceQueue;
+  // A previous failed write must not permanently poison the persistence queue.
+  persistenceQueue = attempt.then(() => undefined, () => undefined);
+  await attempt;
 }
 
-export const SUPER_ADMIN_EMAILS = [
-  'usitakatelvin@gmail.com',
-  'talk2visibyl@gmail.com',
-];
-
 function getInitialSeed(): DatabaseSchema {
-  const salt = bcrypt.genSaltSync(10);
-  const adminPass = bcrypt.hashSync('admin123', salt);
-  const creatorPass = bcrypt.hashSync('creator123', salt);
-  const viewerPass = bcrypt.hashSync('viewer123', salt);
-
   const superAdminTelvin: User = {
     id: 'user_admin_telvin',
     email: 'usitakatelvin@gmail.com',
-    password_hash: adminPass,
+    password_hash: '',
     full_name: 'Kelvin Usitaka',
     avatar_url: '/visplay-symbol.png',
     role: 'admin',
@@ -417,7 +547,7 @@ function getInitialSeed(): DatabaseSchema {
   const adminUser: User = {
     id: 'user_admin_01',
     email: 'talk2visibyl@gmail.com',
-    password_hash: adminPass,
+    password_hash: '',
     full_name: 'Visibyl Admin Superuser',
     avatar_url: '/visplay-symbol.png',
     role: 'admin',
@@ -429,7 +559,7 @@ function getInitialSeed(): DatabaseSchema {
   const creatorUser1: User = {
     id: 'user_creator_01',
     email: 'kunle@nollywood.ng',
-    password_hash: creatorPass,
+    password_hash: '',
     full_name: 'Kunle Afolayan',
     avatar_url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
     role: 'creator',
@@ -455,7 +585,7 @@ function getInitialSeed(): DatabaseSchema {
   const creatorUser2: User = {
     id: 'user_creator_02',
     email: 'nneka@cinematique.africa',
-    password_hash: creatorPass,
+    password_hash: '',
     full_name: 'Nneka Adebayo',
     avatar_url: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80',
     role: 'creator',
@@ -481,7 +611,7 @@ function getInitialSeed(): DatabaseSchema {
   const creatorUser3: User = {
     id: 'user_creator_03',
     email: 'tope@lagoslove.tv',
-    password_hash: creatorPass,
+    password_hash: '',
     full_name: 'Tope Agro',
     avatar_url: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
     role: 'creator',
@@ -507,7 +637,7 @@ function getInitialSeed(): DatabaseSchema {
   const viewerUser: User = {
     id: 'user_viewer_01',
     email: 'viewer@visplay.ng',
-    password_hash: viewerPass,
+    password_hash: '',
     full_name: 'Chidi Okafor',
     avatar_url: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80',
     role: 'viewer',

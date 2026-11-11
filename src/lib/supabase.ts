@@ -1,11 +1,14 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { safeHomePath } from './distribution';
 
 export function getSupabaseCredentials(): { url: string; anonKey: string } {
   const envUrl = (import.meta.env.VITE_SUPABASE_URL as string) || '';
   const envKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string) || '';
 
-  const localUrl = typeof window !== 'undefined' ? localStorage.getItem('visplay_supabase_url') || '' : '';
-  const localKey = typeof window !== 'undefined' ? localStorage.getItem('visplay_supabase_anon_key') || '' : '';
+  // Production identity must be pinned to the operator-managed Supabase project.
+  // Browser-configured providers are permitted only for local development.
+  const localUrl = import.meta.env.DEV && typeof window !== 'undefined' ? localStorage.getItem('visplay_supabase_url') || '' : '';
+  const localKey = import.meta.env.DEV && typeof window !== 'undefined' ? localStorage.getItem('visplay_supabase_anon_key') || '' : '';
 
   const url = (envUrl && !envUrl.includes('your-project-ref') && envUrl.startsWith('https://')) ? envUrl : localUrl;
   const anonKey = (envKey && !envKey.includes('your-supabase-anon-key')) ? envKey : localKey;
@@ -51,7 +54,7 @@ export function getSupabaseClient(): SupabaseClient | null {
 export const supabase = getSupabaseClient();
 
 export function setCustomSupabaseCredentials(url: string, anonKey: string): boolean {
-  if (typeof window !== 'undefined') {
+  if (import.meta.env.DEV && typeof window !== 'undefined') {
     const cleanUrl = url.trim();
     const cleanKey = anonKey.trim();
     if (cleanUrl && cleanKey && cleanUrl.startsWith('https://')) {
@@ -81,7 +84,7 @@ export async function signInWithGoogle() {
     );
   }
 
-  const redirectTo = window.location.origin;
+  const redirectTo = window.location.origin + safeHomePath();
   const { data, error } = await client.auth.signInWithOAuth({
     provider: 'google',
     options: {

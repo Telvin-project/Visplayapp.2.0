@@ -23,6 +23,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
+import { SafetyModerationQueue } from '../components/SafetyModerationQueue';
 
 interface SuperAdminDashboardProps {
   onSelectMovie: (id: string) => void;
@@ -35,15 +36,21 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onSele
   const [applications, setApplications] = useState<any[]>([]);
   const [movies, setMovies] = useState<any[]>([]);
   const [transactions, setTransactions] = useState<any[]>([]);
+  const [refundCases, setRefundCases] = useState<any[]>([]);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [usersList, setUsersList] = useState<any[]>([]);
   const [payouts, setPayouts] = useState<any[]>([]);
   const [featuredMovieId, setFeaturedMovieId] = useState<string | null>(null);
   
-  const [activeTab, setActiveTab] = useState<'overview' | 'applications' | 'moderation' | 'all_movies' | 'transactions' | 'payouts' | 'users' | 'audit'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'applications' | 'moderation' | 'safety' | 'all_movies' | 'transactions' | 'payouts' | 'users' | 'audit'>('overview');
   const [loading, setLoading] = useState(true);
   const [movieSearch, setMovieSearch] = useState('');
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+  const [mediaDrafts, setMediaDrafts] = useState<Record<string, { master: string; preview: string }>>({});
+  const [mediaSubmitting, setMediaSubmitting] = useState<string | null>(null);
+  const [rightsDrafts, setRightsDrafts] = useState<Record<string, {verification_basis:string; evidence_reference:string; review_notes:string}>>({});
+  const [rightsSubmitting, setRightsSubmitting] = useState<string | null>(null);
+  const [ratingDrafts, setRatingDrafts] = useState<Record<string, {content_rating: string; review_notes: string}>>({});
 
   useEffect(() => {
     if (user?.role === 'admin') {
@@ -86,6 +93,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onSele
       if (txRes.ok) {
         const data = await txRes.json();
         setTransactions(data.transactions || []);
+        setRefundCases(data.refund_cases || []);
       }
       if (audRes.ok) {
         const data = await audRes.json();
@@ -135,11 +143,96 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onSele
         setActionSuccess(`Movie status updated to ${action}d.`);
         setTimeout(() => setActionSuccess(null), 3000);
         fetchAdminData();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        alert(data.error || 'Movie review could not be completed.');
       }
     } catch (e) {
       console.error(e);
     }
   };
+
+  const handleVerifyRights = async (movieId: string) => {
+    const draft = rightsDrafts[movieId];
+    if (!draft || draft.evidence_reference.trim().length < 5 || draft.review_notes.trim().length < 20) {
+      return void alert('Enter an actual document/reference ID and at least 20 characters explaining what rights evidence you independently checked.');
+    }
+    if (!window.confirm('Have you personally examined the rights holder and distribution licence or original ownership proof? Do not confirm without evidence.')) return;
+    setRightsSubmitting(movieId);
+    try {
+      const response = await fetch(`/api/admin/movies/${movieId}/rights-review`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(draft),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Could not record rights review.');
+      setActionSuccess('Independent rights review recorded. This is not a replacement for checking actual documents.');
+      await fetchAdminData();
+    } catch (error) { alert(error instanceof Error ? error.message : 'Rights review failed.'); }
+    finally { setRightsSubmitting(null); }
+  };
+
+  const handleContentRating = async (movieId: string) => {
+    const draft = ratingDrafts[movieId];
+    if (!draft || draft.review_notes.trim().length < 20) return void alert('Record at least 20 characters of actual content classification evidence.');
+    const response = await fetch(`/api/admin/movies/${movieId}/content-rating`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(draft),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) return void alert(data.error || 'Content rating failed.');
+    setActionSuccess('Human content rating recorded. Adult-rated films remain blocked until age assurance is approved.');
+    await fetchAdminData();
+  };
+
+  const handleAttachMedia = async (movieId: string, kind: 'master' | 'preview') => {
+    const value = mediaDrafts[movieId]?.[kind]?.trim();
+    if (!value) return void alert('Paste the private storage reference from the approved operator job first.');
+    setMediaSubmitting(`${movieId}:${kind}`);
+    try {
+      const endpoint = kind === 'master' ? 'attach-private-master' : 'attach-preview';
+      const body = kind === 'master' ? { private_video_url: value } : { preview_private_key: value };
+      const response = await fetch(`/api/admin/movies/${movieId}/${endpoint}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'The media object could not be attached.');
+      setMediaDrafts(previous => ({ ...previous, [movieId]: { ...previous[movieId], [kind]: '' } }));
+      setActionSuccess(kind === 'master' ? 'Private master verified. Generate and attach a fresh preview next.' : 'Private preview verified and attached. Movie can now be reviewed for publication.');
+      await fetchAdminData();
+    } catch (error: any) {
+      alert(error?.message || 'Media attachment failed.');
+    } finally {
+      setMediaSubmitting(null);
+    }
+  };
+
+  const renderMediaControls = (movie: any) => (
+    <details className="w-full max-w-md rounded-lg border border-slate-700 bg-slate-900/60 p-2 text-xs">
+      <summary className="cursor-pointer font-semibold text-slate-300">
+        Secure media · Master: {movie.private_master_linked ? 'Linked' : 'Missing'} · Preview: {movie.private_preview_linked ? 'Linked' : 'Missing'}
+      </summary>
+      <div className="mt-3 space-y-2">
+        <p className="text-[11px] text-amber-200">Use only keys printed by the trusted migration or preview job. Linking a master resets its existing preview.</p>
+        <input
+          aria-label={`Private master reference for ${movie.title}`}
+          type="text" placeholder="private://videos/creator-id/uuid.mp4"
+          value={mediaDrafts[movie.id]?.master || ''}
+          onChange={event => setMediaDrafts(previous => ({ ...previous, [movie.id]: { master: event.target.value, preview: previous[movie.id]?.preview || '' } }))}
+          className="w-full rounded-md border border-slate-700 bg-slate-950 p-2 text-slate-100"
+        />
+        <button type="button" disabled={Boolean(mediaSubmitting)} onClick={() => handleAttachMedia(movie.id, 'master')}
+          className="rounded-md border border-cyan-700 px-2 py-1.5 text-cyan-300 disabled:opacity-50">Verify & attach master</button>
+        <input
+          aria-label={`Private preview key for ${movie.title}`}
+          type="text" placeholder="previews/movie-id/uuid.mp4"
+          value={mediaDrafts[movie.id]?.preview || ''}
+          onChange={event => setMediaDrafts(previous => ({ ...previous, [movie.id]: { master: previous[movie.id]?.master || '', preview: event.target.value } }))}
+          className="w-full rounded-md border border-slate-700 bg-slate-950 p-2 text-slate-100"
+        />
+        <button type="button" disabled={Boolean(mediaSubmitting)} onClick={() => handleAttachMedia(movie.id, 'preview')}
+          className="rounded-md border border-emerald-700 px-2 py-1.5 text-emerald-300 disabled:opacity-50">Verify & attach preview</button>
+      </div>
+    </details>
+  );
 
 
   const handleDeleteMovie = async (movie: any) => {
@@ -241,9 +334,10 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onSele
         {[
           { id: 'overview', label: 'Platform Overview' },
           { id: 'applications', label: `Creator Applications (${applications.filter(a => a.status === 'pending').length} Pending)` },
-          { id: 'moderation', label: `Movie Moderation (${movies.filter(m => m.status === 'pending').length} Pending)` },
+          { id: 'moderation', label: `Movie Moderation (${movies.filter(m => m.status === 'pending' || m.safety_hold).length} Pending/Held)` },
+          { id: 'safety', label: 'Safety Reports & Appeals' },
           { id: 'all_movies', label: `All Movies & Financials (${movies.length})` },
-          { id: 'transactions', label: `Transactions Ledger (${transactions.length})` },
+          { id: 'transactions', label: `Recent Transactions (${transactions.length})` },
           { id: 'payouts', label: 'Creator Monthly Payouts' },
           { id: 'users', label: `Users (${usersList.length})` },
           { id: 'audit', label: 'Platform Audit Log' },
@@ -261,6 +355,8 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onSele
           </button>
         ))}
       </div>
+
+      {activeTab === 'safety' && <SafetyModerationQueue />}
 
       {/* ---------------- TAB 1: PLATFORM OVERVIEW ---------------- */}
       {activeTab === 'overview' && metrics && (
@@ -398,13 +494,13 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onSele
           <h3 className="text-base font-bold text-white">Movie Content Moderation Queue</h3>
 
           <div className="space-y-3">
-            {movies.filter(m => m.status === 'pending').length === 0 ? (
+            {movies.filter(m => m.status === 'pending' || m.safety_hold).length === 0 ? (
               <div className="py-12 text-center bg-[#0d121d] rounded-2xl border border-slate-800">
                 <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto mb-2" />
                 <p className="text-xs text-slate-400">All creator movie submissions are up to date.</p>
               </div>
             ) : (
-              movies.filter(m => m.status === 'pending').map((m) => (
+              movies.filter(m => m.status === 'pending' || m.safety_hold).map((m) => (
                 <div
                   key={m.id}
                   className="p-5 bg-[#0d121d] border border-slate-800 rounded-2xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4"
@@ -421,13 +517,34 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onSele
                         {m.genre} · {m.creator_name} · ₦{m.price_ngn}
                       </p>
                       <p className="text-xs text-slate-300 max-w-xl">{m.synopsis}</p>
+                      <div className="mt-3 space-y-2 rounded-lg border border-amber-900/40 bg-amber-950/20 p-3 text-xs text-slate-300">
+                        <p className="font-semibold text-amber-300">Human rights review: {m.safety_hold ? 'Safety hold — fresh review may be required' : m.rights_reviewed ? 'Recorded' : 'Required'}. Creator rights declaration: {m.rights_declared ? 'Present' : 'Legacy — check original documents'}.</p>
+                        {(!m.rights_reviewed || m.safety_hold) && <>
+                          <select value={rightsDrafts[m.id]?.verification_basis || 'licence'} onChange={event => setRightsDrafts(old => ({ ...old, [m.id]: { verification_basis: event.target.value, evidence_reference: old[m.id]?.evidence_reference || '', review_notes: old[m.id]?.review_notes || '' } }))} className="w-full rounded-lg border border-slate-700 bg-slate-950 p-2"><option value="original">Verified original ownership</option><option value="licence">Verified distribution licence</option><option value="written_authorization">Verified signed authorization</option><option value="other">Other verifiable legal evidence</option></select>
+                          <input value={rightsDrafts[m.id]?.evidence_reference || ''} onChange={event => setRightsDrafts(old => ({ ...old, [m.id]: { verification_basis: old[m.id]?.verification_basis || 'licence', evidence_reference: event.target.value, review_notes: old[m.id]?.review_notes || '' } }))} placeholder="Checked contract/document reference number" maxLength={200} className="w-full rounded-lg border border-slate-700 bg-slate-950 p-2" />
+                          <textarea value={rightsDrafts[m.id]?.review_notes || ''} onChange={event => setRightsDrafts(old => ({ ...old, [m.id]: { verification_basis: old[m.id]?.verification_basis || 'licence', evidence_reference: old[m.id]?.evidence_reference || '', review_notes: event.target.value } }))} placeholder="Describe who issued the rights and precisely what you verified (20+ characters)" maxLength={1000} rows={2} className="w-full rounded-lg border border-slate-700 bg-slate-950 p-2" />
+                          <button type="button" disabled={rightsSubmitting === m.id} onClick={() => handleVerifyRights(m.id)} className="rounded-lg border border-amber-700 px-3 py-2 font-semibold text-amber-200">{rightsSubmitting === m.id ? 'Recording…' : 'Record verified rights'}</button>
+                        </>}
+                      </div>
+                      <div className="mt-3 space-y-2 rounded-lg border border-slate-700 bg-slate-900/60 p-3 text-xs text-slate-300">
+                        <p className="font-semibold text-white">Human audience rating: {m.content_rating_reviewed ? `${m.content_rating} — reviewed` : 'Required before publication'}</p>
+                        {!m.content_rating_reviewed && <>
+                          <select value={ratingDrafts[m.id]?.content_rating || 'GENERAL'} onChange={event => setRatingDrafts(old => ({ ...old, [m.id]: { content_rating: event.target.value, review_notes: old[m.id]?.review_notes || '' } }))} className="w-full rounded-lg border border-slate-700 bg-slate-950 p-2"><option value="GENERAL">General audience</option><option value="PARENTAL_GUIDANCE">Parental guidance</option><option value="TEEN">Teens 13+</option><option value="ADULT">Adults only — publishing blocked without age assurance</option></select>
+                          <textarea value={ratingDrafts[m.id]?.review_notes || ''} onChange={event => setRatingDrafts(old => ({ ...old, [m.id]: { content_rating: old[m.id]?.content_rating || 'GENERAL', review_notes: event.target.value } }))} rows={2} placeholder="Describe the scenes reviewed and reason for audience classification (20+ characters)" className="w-full rounded-lg border border-slate-700 bg-slate-950 p-2" />
+                          <button type="button" onClick={() => handleContentRating(m.id)} className="rounded-lg border border-cyan-700 px-3 py-2 font-semibold text-cyan-200">Record human content rating</button>
+                        </>}
+                      </div>
+                      {renderMediaControls(m)}
                     </div>
                   </div>
 
                   <div className="flex items-center gap-2 self-end md:self-auto shrink-0">
+                    {m.safety_hold ? <span className="max-w-44 rounded-lg border border-rose-800 p-3 text-xs text-rose-200">Safety hold active. Recheck rights here; restoration must occur in Safety Reports & Appeals after an upheld appeal.</span> : <>
                     <button
                       onClick={() => handleReviewMovie(m.id, 'approve')}
-                      className="py-2 px-3.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-md"
+                      disabled={!m.private_master_linked || !m.private_preview_linked || !m.rights_reviewed || !m.content_rating_reviewed || m.content_rating === 'ADULT' || m.safety_hold}
+                      title={!m.private_master_linked || !m.private_preview_linked || !m.rights_reviewed ? 'Private master, five-minute preview and documented rights review required first' : 'Publish after content review'}
+                      className="py-2 px-3.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-md disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       <Check className="w-3.5 h-3.5" />
                       <span>Approve & Publish</span>
@@ -439,6 +556,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onSele
                       <X className="w-3.5 h-3.5" />
                       <span>Reject</span>
                     </button>
+                    </>}
                   </div>
                 </div>
               ))
@@ -521,6 +639,7 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onSele
                     <td className="py-3 px-3 text-fuchsia-300">₦{(m.platform_fee_ngn || 0).toLocaleString()}</td>
                     <td className="py-3 px-3 font-sans">
                       <div className="flex min-w-[125px] flex-col items-start gap-2">
+                        {renderMediaControls(m)}
                         <button
                           onClick={() => onSelectMovie(m.id)}
                           className="text-cyan-400 hover:underline"
@@ -558,7 +677,16 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onSele
       {/* ---------------- TAB 5: FINANCIAL TRANSACTIONS LEDGER ---------------- */}
       {activeTab === 'transactions' && (
         <div className="space-y-4">
-          <h3 className="text-base font-bold text-white">Reconciled Financial Ledger</h3>
+          <h3 className="text-base font-bold text-white">Financial Activity — Latest 200 Transactions</h3>
+          {refundCases.length > 0 && (
+            <div role="alert" className="rounded-xl border border-amber-500/50 bg-amber-950/40 p-4 text-sm text-amber-100">
+              <strong>{refundCases.length} payment refund review(s) need attention.</strong>
+              <p className="mt-1 text-xs">Verify each charge and refund through Paystack, then reconcile the financial record with dual approval. Never issue a second credit or erase the original event.</p>
+              <ul className="mt-2 list-disc pl-4 text-xs font-mono">
+                {refundCases.slice(0, 20).map(item => <li key={item.reference}>{item.reference}: {item.status}</li>)}
+              </ul>
+            </div>
+          )}
           <div className="overflow-x-auto bg-[#0d121d] border border-slate-800 rounded-2xl">
             <table className="w-full text-left text-xs text-slate-300">
               <thead className="border-b border-slate-800 text-slate-400 font-semibold bg-slate-900/40">
@@ -581,7 +709,8 @@ export const SuperAdminDashboard: React.FC<SuperAdminDashboardProps> = ({ onSele
                     <td className="py-3 px-3 uppercase text-[10px]">{tx.type}</td>
                     <td className="py-3 px-3 font-bold text-emerald-300">₦{tx.amount_ngn.toLocaleString()}</td>
                     <td className="py-3 px-3">
-                      <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950 px-1.5 py-0.5 rounded uppercase">
+                      <span className={'text-[10px] font-bold px-1.5 py-0.5 rounded uppercase ' +
+                        (tx.status === 'refund_required' ? 'text-amber-200 bg-amber-950' : 'text-emerald-400 bg-emerald-950')}>
                         {tx.status}
                       </span>
                     </td>

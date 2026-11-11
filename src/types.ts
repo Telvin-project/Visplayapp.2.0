@@ -40,6 +40,7 @@ export interface Movie {
   bundle_id?: string;
   episode_number?: number;
   status: 'pending' | 'approved' | 'rejected' | 'published';
+  content_rating?: 'GENERAL' | 'PARENTAL_GUIDANCE' | 'TEEN' | 'ADULT';
   views_count: number;
   paid_unlocks_count: number;
   price_ngn: number;
@@ -73,7 +74,7 @@ export interface WalletTransaction {
   user_email?: string;
   amount_ngn: number;
   type: 'deposit' | 'purchase' | 'earning' | 'payout';
-  status: 'successful' | 'pending' | 'failed';
+  status: 'successful' | 'pending' | 'failed' | 'refund_required';
   reference: string;
   payment_method: 'paystack' | 'flutterwave' | 'wallet';
   description: string;
@@ -99,7 +100,7 @@ export interface CreatorLedger {
   gross_amount_ngn: number;
   creator_share_ngn: number; // 85%
   platform_fee_ngn: number; // 15%
-  status: 'accrued' | 'paid';
+  status: 'accrued' | 'reserved' | 'paid';
   payout_id?: string;
   created_at: string;
 }

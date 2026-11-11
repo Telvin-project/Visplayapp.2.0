@@ -1,24 +1,23 @@
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
-import fs from 'fs';
 import jwt from 'jsonwebtoken';
-import bcrypt from 'bcryptjs';
 import multer from 'multer';
-import { S3Client, PutObjectCommand, DeleteObjectsCommand, CreateMultipartUploadCommand, UploadPartCommand, CompleteMultipartUploadCommand, AbortMultipartUploadCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { S3Client, GetObjectCommand, HeadObjectCommand, DeleteObjectsCommand } from '@aws-sdk/client-s3';
+import { Readable } from 'node:stream';
 import cookieParser from 'cookie-parser';
+import { createHash } from 'node:crypto';
 import { v4 as uuidv4 } from 'uuid';
 import {
   loadDatabase,
   saveDatabase,
   initializeDatabase,
+  refreshDatabase,
+  AppStateConflictError,
   User,
   CreatorProfile,
   Movie,
   EpisodeBundle,
-  WalletTransaction,
   Purchase,
-  CreatorLedger,
   CreatorPayout,
   Comment,
   Like,
@@ -29,10 +28,26 @@ import {
   AdCampaign,
   AuditLog,
   Notification,
-  SUPER_ADMIN_EMAILS,
-  deleteSupabaseAuthUserByEmail,
+  SafetyReport,
+  SafetyAppeal,
+  deleteSupabaseAuthUserById,
   verifySupabaseAccessToken,
 } from './server/db.js';
+import { resolveVerifiedIdentity } from './server/identity.js';
+import { authorizeMovieStream, ownsFullMovie, privateVideoKey, toClientMovie } from './server/media-access.js';
+import { UploadSessionStore, uploadErrorStatus } from './server/upload-sessions.js';
+import { parseUploadSpec, MAX_VIDEO_BYTES, PART_BYTES } from './server/upload-security.js';
+import { abortUpload, completeMultipart, finalizeUpload, prepareUpload, publicAssetUrl, signUploadPart } from './server/upload-operations.js';
+import { getFinanceStore, financeErrorResponse } from './server/financial.js';
+import { initializePaystack, verifyPaystackCharge, verifyPaystackSignature, PaystackGatewayError, PaystackNotConfirmedError } from './server/paystack.js';
+import { protectAsyncRoutes } from './server/http-safety.js';
+import { assertRuntimeConfig } from './server/ops-config.js';
+import {
+  SafetyInputError, parseReportInput, limitedText, targetOwner, blockedCreatorIds,
+  blockingUserIds, publiclyVisibleMovie, pendingRightsComplaint,
+  normalizeSafetyCollections, parseRightsAttestation,
+  CONTENT_RATINGS, validatePublicComment,
+} from './server/trust-safety.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || (process.env.NODE_ENV === 'production' ? '' : 'visplay-super-secure-jwt-secret-nollywood-2026');
 if (!JWT_SECRET) {
@@ -41,44 +56,17 @@ if (!JWT_SECRET) {
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const isProd = process.env.NODE_ENV === 'production';
 
-// Ensure upload folders exist
-const uploadsDir = path.join(process.cwd(), 'public', 'uploads');
-const videosDir = path.join(uploadsDir, 'videos');
-const postersDir = path.join(uploadsDir, 'posters');
-const avatarsDir = path.join(uploadsDir, 'avatars');
-
-[uploadsDir, videosDir, postersDir, avatarsDir].forEach(dir => {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-});
-
-// Configure Multer for persistent disk storage
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    if (file.mimetype.startsWith('video/')) {
-      cb(null, videosDir);
-    } else if (file.fieldname === 'avatar') {
-      cb(null, avatarsDir);
-    } else {
-      cb(null, postersDir);
-    }
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname) || (file.mimetype.startsWith('video/') ? '.mp4' : '.jpg');
-    const safeName = `${Date.now()}-${uuidv4().substring(0, 8)}${ext}`;
-    cb(null, safeName);
-  },
-});
-
-const upload = multer({
-  storage,
-  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB limit
-});
-
-// Movie media is stored in Cloudflare R2 so uploads survive Render redeploys.
-const movieMediaUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
+// The API accepts only movie metadata, NEVER multipart file bodies. Files are
+// uploaded to private R2 staging and validated before promotion.
+const movieMediaUpload = multer({ limits: { fields: 12, fieldSize: 8 * 1024, parts: 12 } });
 const MEDIA_BUCKET = process.env.R2_BUCKET_NAME || 'visplay-media';
+function privateVideoBucket(): string {
+  const name = process.env.R2_PRIVATE_VIDEO_BUCKET?.trim();
+  if (!name || name === MEDIA_BUCKET) {
+    throw new Error('A separate, non-public R2_PRIVATE_VIDEO_BUCKET is required for premium video.');
+  }
+  return name;
+}
 function isR2Configured() {
   return Boolean(process.env.R2_ACCOUNT_ID && process.env.R2_ACCESS_KEY_ID && process.env.R2_SECRET_ACCESS_KEY && process.env.R2_PUBLIC_BASE_URL);
 }
@@ -89,38 +77,20 @@ function getR2Client() {
   if (!accountId || !accessKeyId || !secretAccessKey) throw new Error('Cloudflare R2 credentials are missing from the server environment.');
   return new S3Client({ region: 'auto', endpoint: `https://${accountId}.r2.cloudflarestorage.com`, credentials: { accessKeyId, secretAccessKey } });
 }
-function getR2PublicUrl(objectPath: string) {
-  const baseUrl = process.env.R2_PUBLIC_BASE_URL?.replace(/\/+$/, '');
-  if (!baseUrl) throw new Error('R2_PUBLIC_BASE_URL is missing from the server environment.');
-  return `${baseUrl}/${objectPath.split('/').map(encodeURIComponent).join('/')}`;
-}
-async function storeMovieMedia(file: Express.Multer.File, folder: 'videos' | 'posters') {
-  const objectPath = `${folder}/${Date.now()}-${uuidv4()}${path.extname(file.originalname) || (folder === 'videos' ? '.mp4' : '.jpg')}`;
-  await getR2Client().send(new PutObjectCommand({ Bucket: MEDIA_BUCKET, Key: objectPath, Body: file.buffer, ContentType: file.mimetype || (folder === 'videos' ? 'video/mp4' : 'image/jpeg'), CacheControl: 'public, max-age=31536000, immutable' }));
-  return getR2PublicUrl(objectPath);
-}
-
-// Best-effort migration for legacy uploads: if an old file still exists on the
-// Render instance, copy it into durable storage the first time its movie is opened.
-async function migrateLegacyMediaUrl(url?: string | null): Promise<string | undefined> {
-  if (!url || !url.startsWith('/uploads/')) return url || undefined;
-  const safeParts = url.slice('/uploads/'.length).split('/').filter(part => part && part !== '.' && part !== '..');
-  if (safeParts.length < 2) return url;
-  const localPath = path.join(uploadsDir, ...safeParts);
-  if (!fs.existsSync(localPath) || !isR2Configured()) return url;
-  try {
-    const folder = safeParts[0] === 'videos' ? 'videos' : 'posters';
-    const objectPath = `${folder}/migrated-${path.basename(localPath)}`;
-    await getR2Client().send(new PutObjectCommand({ Bucket: MEDIA_BUCKET, Key: objectPath, Body: fs.readFileSync(localPath), ContentType: folder === 'videos' ? 'video/mp4' : 'image/jpeg', CacheControl: 'public, max-age=31536000, immutable' }));
-    return getR2PublicUrl(objectPath);
-  } catch (error) {
-    console.error('Legacy media migration to R2 failed:', error);
-    return url;
-  }
-}
+const uploadSessions = new UploadSessionStore();
 
 export interface AuthenticatedRequest extends Request {
   user?: User;
+  financialPurchases?: Purchase[];
+}
+
+function guardedFinancialRead(handler: (req: AuthenticatedRequest, res: Response) => Promise<void>) {
+  return (req: AuthenticatedRequest, res: Response) => {
+    void handler(req, res).catch(error => {
+      console.error('Financial read failed:', error instanceof Error ? error.name : 'error');
+      if (!res.headersSent) res.status(503).json({ error: 'Financial records are temporarily unavailable.' });
+    });
+  };
 }
 
 // Authentication Middleware
@@ -132,10 +102,13 @@ function authenticateToken(req: AuthenticatedRequest, res: Response, next: NextF
   }
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as { userId: string };
+    const decoded = jwt.verify(token, JWT_SECRET) as { userId?: string; authId?: string };
     const db = loadDatabase();
     const user = db.users.find(u => u.id === decoded.userId);
-    if (user) {
+    // Tokens minted by the insecure legacy login lack authId and are rejected.
+    // An unbound legacy account cannot be accessed until ownership is verified
+    // and its Supabase Auth ID is set by the controlled migration procedure.
+    if (user?.supabase_auth_id && decoded.authId === user.supabase_auth_id) {
       req.user = user;
     }
   } catch (err) {
@@ -167,7 +140,7 @@ function requireCreator(req: AuthenticatedRequest, res: Response, next: NextFunc
     return;
   }
   const db = loadDatabase();
-  const profile = db.creator_profiles.find(cp => cp.user_id === req.user!.id && cp.status === 'approved');
+  const profile = db.creator_profiles.find(cp => cp.user_id === req.user!.id && cp.status === 'approved' && !cp.safety_restricted);
   if (req.user.role !== 'admin' && !profile) {
     res.status(403).json({ error: 'Approved creator account required.' });
     return;
@@ -176,102 +149,416 @@ function requireCreator(req: AuthenticatedRequest, res: Response, next: NextFunc
 }
 
 async function startServer() {
+  assertRuntimeConfig(process.env);
   await initializeDatabase();
+  // No production money or paid access until the normalized ledger has been
+  // migrated, reconciled, independently approved and made available.
+  if (isProd && (process.env.VISPLAY_DEPLOYMENT_STAGE || 'production') === 'production') {
+    await getFinanceStore().assertReady();
+  }
   const app = express();
+  protectAsyncRoutes(app);
+
+  // Infrastructure liveness must not depend on credentials, JSON state,
+  // Paystack or R2; readiness is a separate, stricter check below.
+  app.get('/_health/live', (_req: Request, res: Response) => {
+    res.set('Cache-Control', 'no-store').json({ status: 'alive' });
+  });
+  app.get('/_health/ready', async (_req: Request, res: Response) => {
+    try {
+      await refreshDatabase();
+      await getFinanceStore().assertReady();
+      res.set('Cache-Control', 'no-store').json({ status: 'ready' });
+    } catch {
+      res.set('Cache-Control', 'no-store').status(503).json({ status: 'not_ready' });
+    }
+  });
+
+  // Paystack signs the ORIGINAL bytes, not JSON.stringify(parsedData). This
+  // route must run before express.json and must never trust a callback alone.
+  app.post('/api/paystack/webhook', express.raw({ type: 'application/json', limit: '128kb' }), async (req: Request, res: Response) => {
+    const secret = process.env.PAYSTACK_SECRET_KEY;
+    if (!secret) return void res.status(503).end();
+    if (!verifyPaystackSignature(req.body, req.header('x-paystack-signature'), secret)) {
+      return void res.status(401).end();
+    }
+    let event: any;
+    try { event = JSON.parse((req.body as Buffer).toString('utf8')); }
+    catch { return void res.status(400).end(); }
+    if (event?.event !== 'charge.success') return void res.status(200).end();
+    const reference = event?.data?.reference;
+    if (typeof reference !== 'string' || !/^[A-Za-z0-9_-]{1,120}$/.test(reference)) return void res.status(400).end();
+    try {
+      const verified = await verifyPaystackCharge(reference);
+      const settled = await getFinanceStore().settlePaystack(verified);
+      if (settled.refund_required) console.warn('Duplicate paid movie charge requires refund:', createHash('sha256').update(reference).digest('hex').slice(0, 16));
+      res.status(200).end();
+    } catch (error) {
+      // A 5xx allows provider retry after network/DB outages; never ACK before
+      // durable settlement. Operational logs should monitor repeated failures.
+      console.error('Paystack webhook settlement deferred:', error instanceof Error ? error.name : 'error');
+      res.status(503).end();
+    }
+  });
 
   app.use(express.json());
   app.use(cookieParser());
+  // In production, refresh the versioned state before identity, entitlement
+  // and rights checks. CAS on mutations prevents stale writers from clobbering
+  // a newer document; normalized records remain a required launch gate.
+  app.use('/api', (req: Request, res: Response, next: NextFunction) => {
+    if (!isProd) return void next();
+    void refreshDatabase().then(() => next()).catch(() => {
+      res.status(503).json({ error: 'Account state is temporarily unavailable.' });
+    });
+  });
   app.use(authenticateToken);
+
+  // Cookie-authorized writes must originate from the approved web origin.
+  // SameSite alone is not a complete defense against same-site subdomains.
+  app.use('/api', (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    if (!isProd || !['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) || !req.cookies?.visplay_token) {
+      return void next();
+    }
+    const allowed = (process.env.TRUSTED_WEB_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean);
+    const origin = req.header('origin');
+    if (!origin || !allowed.includes(origin)) {
+      return void res.status(403).json({ error: 'Untrusted request origin.' });
+    }
+    next();
+  });
+
+  // The old JSON wallet_balance is no longer an accounting input or an API
+  // output. Read the canonical balance from Postgres for authenticated calls.
+  app.use('/api', async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    if (!req.user) return void next();
+    // Reporting, blocking and human review must remain accessible even during
+    // financial maintenance. These routes never use wallet balances or purchase
+    // entitlements; identity validation above still applies in full.
+    if (/^\/api\/(?:safety\/|admin\/safety\/)/.test(req.originalUrl) ||
+      /^\/api\/admin\/movies\/[A-Za-z0-9_-]+\/(?:rights-review|content-rating)(?:\?|$)/.test(req.originalUrl)) return void next();
+    try {
+      const [balance, purchases] = await Promise.all([
+        getFinanceStore().getBalance(req.user.id), getFinanceStore().purchases(req.user.id),
+      ]);
+      req.user = { ...req.user, wallet_balance: balance };
+      req.financialPurchases = purchases;
+      next();
+    } catch { res.status(503).json({ error: 'Account financial state is unavailable. Please retry later.' }); }
+  });
+
+  // Legacy local video URLs must not bypass the paid streaming gate.
+  app.use(['/uploads', '/videos'], (_req: Request, res: Response) => {
+    res.status(404).end();
+  });
 
   // Serve static assets from public folder
   app.use(express.static(path.join(process.cwd(), 'public')));
 
   // -------------------------------------------------------------
+  // SECTION G: USER SAFETY, MODERATION, RIGHTS AND APPEALS
+  // -------------------------------------------------------------
+  // Contact addresses are deliberately not invented. Employer must publish
+  // and approve the real support, privacy and copyright contact information.
+  app.get('/api/safety/config', (_req: Request, res: Response) => {
+    const publicEmail = (name: string) => {
+      const value = (process.env[name] || '').trim();
+      return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) ? value : null;
+    };
+    res.json({
+      support_email: publicEmail('VISPLAY_SUPPORT_EMAIL'),
+      copyright_email: publicEmail('VISPLAY_COPYRIGHT_EMAIL'),
+      privacy_email: publicEmail('VISPLAY_PRIVACY_EMAIL'),
+      creator_policy_version: '2026-11-11',
+      employer_legal_approval_required: true,
+    });
+  });
+
+  app.post('/api/safety/reports', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const input = parseReportInput(req.body);
+      const db = normalizeSafetyCollections(loadDatabase());
+      const target = targetOwner(db, input.target_type, input.target_id);
+      if (!target) return void res.status(404).json({ error: 'Report target not found.' });
+      if (input.target_type === 'comment' && db.comments.find(comment => comment.id === input.target_id)?.moderation_hidden) {
+        return void res.status(404).json({ error: 'This comment is no longer public.' });
+      }
+      if (target.id === req.user!.id) return void res.status(400).json({ error: 'You cannot report your own content or account.' });
+      const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+      const recent = db.safety_reports!.filter(report => report.reporter_user_id === req.user!.id && Date.parse(report.created_at) > oneDayAgo);
+      if (recent.length >= 10) return void res.status(429).json({ error: 'Daily report limit reached. Please contact support for an emergency.' });
+      if (recent.some(report => report.target_type === input.target_type && report.target_id === input.target_id)) {
+        return void res.status(409).json({ error: 'You have already reported this item in the last 24 hours.' });
+      }
+      const record: SafetyReport = {
+        id: `saf_${uuidv4()}`, reporter_user_id: req.user!.id,
+        ...input, status: 'open', created_at: new Date().toISOString(),
+      };
+      db.safety_reports!.push(record);
+      await saveDatabase(db);
+      res.status(201).json({ report_id: record.id, status: record.status, message: 'Report submitted for human review.' });
+    } catch (error) {
+      if (error instanceof SafetyInputError) return void res.status(error.status).json({ error: error.message });
+      console.error('Safety report persistence failed:', error instanceof Error ? error.name : 'error');
+      res.status(503).json({ error: 'Unable to save the report right now; please try again.' });
+    }
+  });
+
+  app.get('/api/safety/my-reports', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const db = loadDatabase();
+    const reports = (db.safety_reports || []).filter(report => report.reporter_user_id === req.user!.id)
+      .map(({ id, target_type, target_id, reason, description, status, created_at, reviewed_at }) =>
+        ({ id, target_type, target_id, reason, description, status, created_at, reviewed_at }));
+    res.json({ reports });
+  });
+
+  app.get('/api/safety/blocks', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const db = loadDatabase();
+    const blocks = (db.safety_blocks || []).filter(block => block.blocker_user_id === req.user!.id).map(block => ({
+      id: block.id,
+      user_id: block.blocked_user_id,
+      display_name: db.users.find(user => user.id === block.blocked_user_id)?.full_name || 'User',
+      created_at: block.created_at,
+    }));
+    res.json({ blocks });
+  });
+
+  app.post('/api/safety/blocks/:userId', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    const db = normalizeSafetyCollections(loadDatabase());
+    const target = db.users.find(user => user.id === req.params.userId);
+    if (!target) return void res.status(404).json({ error: 'User not found.' });
+    if (target.id === req.user!.id) return void res.status(400).json({ error: 'You cannot block yourself.' });
+    if (!db.safety_blocks!.some(block => block.blocker_user_id === req.user!.id && block.blocked_user_id === target.id)) {
+      db.safety_blocks!.push({ id: `blk_${uuidv4()}`, blocker_user_id: req.user!.id, blocked_user_id: target.id, created_at: new Date().toISOString() });
+      // Following a blocked creator is unsafe and confusing; remove only the
+      // social relation, not purchases, wallets, creator payouts or content.
+      const profiles = new Set(db.creator_profiles.filter(profile => profile.user_id === target.id).map(profile => profile.id));
+      db.follows = db.follows.filter(follow => !(follow.follower_user_id === req.user!.id && profiles.has(follow.creator_user_id)));
+      await saveDatabase(db);
+    }
+    res.json({ blocked: true });
+  });
+
+  app.delete('/api/safety/blocks/:userId', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    const db = normalizeSafetyCollections(loadDatabase());
+    db.safety_blocks = db.safety_blocks!.filter(block => !(block.blocker_user_id === req.user!.id && block.blocked_user_id === req.params.userId));
+    await saveDatabase(db);
+    res.json({ blocked: false });
+  });
+
+  app.post('/api/safety/appeals', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const reportId = limitedText(req.body?.report_id, 120, 'Report ID');
+      const statement = limitedText(req.body?.statement, 1200, 'Appeal explanation', 15);
+      const db = normalizeSafetyCollections(loadDatabase());
+      const report = db.safety_reports!.find(item => item.id === reportId);
+      if (!report || !['actioned', 'dismissed'].includes(report.status)) {
+        return void res.status(404).json({ error: 'A reviewed report is required for appeal.' });
+      }
+      const owner = targetOwner(db, report.target_type, report.target_id);
+      if (report.reporter_user_id !== req.user!.id && owner?.id !== req.user!.id) {
+        return void res.status(403).json({ error: 'You are not a party to this report.' });
+      }
+      if (db.safety_appeals!.some(item => item.report_id === reportId && item.appellant_user_id === req.user!.id)) {
+        return void res.status(409).json({ error: 'An appeal for this decision already exists.' });
+      }
+      const appeal: SafetyAppeal = {
+        id: `apl_${uuidv4()}`, report_id: reportId,
+        appellant_user_id: req.user!.id, statement, status: 'open', created_at: new Date().toISOString(),
+      };
+      db.safety_appeals!.push(appeal);
+      await saveDatabase(db);
+      res.status(201).json({ appeal_id: appeal.id, status: 'open' });
+    } catch (error) {
+      if (error instanceof SafetyInputError) return void res.status(error.status).json({ error: error.message });
+      res.status(503).json({ error: 'Could not save appeal; please retry.' });
+    }
+  });
+
+  app.get('/api/safety/my-appeals', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const db = loadDatabase();
+    const appeals = (db.safety_appeals || []).filter(appeal => appeal.appellant_user_id === req.user!.id)
+      .map(({ id, report_id, statement, status, created_at, reviewed_at }) => ({ id, report_id, statement, status, created_at, reviewed_at }));
+    res.json({ appeals });
+  });
+
+  app.get('/api/admin/safety/reports', requireAdmin, (req: AuthenticatedRequest, res: Response) => {
+    const db = loadDatabase();
+    res.json({
+      reports: [...(db.safety_reports || [])].reverse(),
+      appeals: [...(db.safety_appeals || [])].reverse(),
+    });
+  });
+
+  app.post('/api/admin/safety/reports/:id/review', requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const status = req.body?.status;
+      const enforcement = req.body?.enforcement_action || 'none';
+      if (!['reviewing', 'actioned', 'dismissed'].includes(status) ||
+        !['none', 'hide_comment', 'hold_movie', 'restrict_creator', 'restrict_user'].includes(enforcement)) {
+        throw new SafetyInputError('Select a supported review outcome and enforcement action.');
+      }
+      const note = limitedText(req.body?.decision_note, 1000, 'Review reason', 12);
+      const db = normalizeSafetyCollections(loadDatabase());
+      const report = db.safety_reports!.find(item => item.id === req.params.id);
+      if (!report) return void res.status(404).json({ error: 'Report not found.' });
+      if (report.reporter_user_id === req.user!.id) return void res.status(403).json({ error: 'A different reviewer must handle your own report.' });
+      if (report.status === 'actioned' || report.status === 'dismissed') return void res.status(409).json({ error: 'Decision is final; use the appeal process for a re-review.' });
+      if (status !== 'actioned' && enforcement !== 'none') throw new SafetyInputError('Enforcement requires the actioned decision.');
+      if (status === 'actioned' && enforcement === 'none') throw new SafetyInputError('An actioned report requires an explicit safety action.');
+      const expectedTarget = { hide_comment: 'comment', hold_movie: 'movie', restrict_creator: 'creator', restrict_user: 'user' } as const;
+      if (enforcement !== 'none' && expectedTarget[enforcement as keyof typeof expectedTarget] !== report.target_type) {
+        throw new SafetyInputError('Enforcement action does not match the report target.');
+      }
+      if (enforcement === 'hide_comment') {
+        const comment = db.comments.find(item => item.id === report.target_id);
+        if (!comment) return void res.status(404).json({ error: 'Comment no longer exists.' });
+        comment.moderation_hidden = true;
+      }
+      if (enforcement === 'hold_movie') {
+        const movie = db.movies.find(item => item.id === report.target_id);
+        if (!movie) return void res.status(404).json({ error: 'Movie no longer exists.' });
+        movie.safety_hold = true;
+      }
+      if (enforcement === 'restrict_creator') {
+        const creator = db.creator_profiles.find(item => item.id === report.target_id);
+        if (!creator) return void res.status(404).json({ error: 'Creator no longer exists.' });
+        creator.safety_restricted = true;
+      }
+      if (enforcement === 'restrict_user') {
+        const user = db.users.find(item => item.id === report.target_id);
+        if (!user) return void res.status(404).json({ error: 'User no longer exists.' });
+        if (user.role === 'admin') return void res.status(403).json({ error: 'Admin status cannot be changed through an ordinary safety report.' });
+        user.safety_restricted = true;
+      }
+      const now = new Date().toISOString();
+      report.status = status;
+      report.reviewed_at = now;
+      report.reviewer_user_id = req.user!.id;
+      report.decision_note = note;
+      report.enforcement_action = enforcement;
+      db.audit_logs.push({
+        id: `aud_${uuidv4()}`, admin_id: req.user!.id, admin_name: req.user!.full_name,
+        action: `SAFETY_${status.toUpperCase()}`, target_type: report.target_type,
+        target_id: report.target_id, details: `Case ${report.id}; enforcement ${enforcement}; reason: ${note}`, created_at: now,
+      });
+      const ownerId = targetOwner(db, report.target_type, report.target_id)?.id;
+      for (const id of new Set([report.reporter_user_id, ownerId].filter((id): id is string => Boolean(id)))) {
+        db.notifications.push({ id: `notif_${uuidv4()}`, user_id: id,
+          title: 'Safety report updated', message: `Report ${report.id} is now ${status}. Open the Safety Center for details.`,
+          is_read: false, created_at: now });
+      }
+      await saveDatabase(db);
+      res.json({ success: true, status, enforcement_action: enforcement });
+    } catch (error) {
+      if (error instanceof SafetyInputError) return void res.status(error.status).json({ error: error.message });
+      console.error('Safety review failed:', error instanceof Error ? error.name : 'error');
+      res.status(503).json({ error: 'Safety review could not be saved.' });
+    }
+  });
+
+  app.post('/api/admin/safety/appeals/:id/review', requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const outcome = req.body?.outcome;
+      if (outcome !== 'upheld' && outcome !== 'rejected') throw new SafetyInputError('Choose upheld or rejected.');
+      const note = limitedText(req.body?.decision_note, 1000, 'Appeal decision reason', 12);
+      const db = normalizeSafetyCollections(loadDatabase());
+      const appeal = db.safety_appeals!.find(item => item.id === req.params.id);
+      if (!appeal) return void res.status(404).json({ error: 'Appeal not found.' });
+      if (appeal.appellant_user_id === req.user!.id) return void res.status(403).json({ error: 'A different reviewer must decide your appeal.' });
+      if (appeal.status === 'upheld' || appeal.status === 'rejected') return void res.status(409).json({ error: 'Appeal already decided.' });
+      appeal.status = outcome;
+      appeal.decision_note = note;
+      appeal.reviewed_at = new Date().toISOString();
+      appeal.reviewer_user_id = req.user!.id;
+      db.audit_logs.push({ id: `aud_${uuidv4()}`, admin_id: req.user!.id, admin_name: req.user!.full_name,
+        action: `SAFETY_APPEAL_${outcome.toUpperCase()}`, target_type: 'safety_appeal', target_id: appeal.id,
+        details: note, created_at: appeal.reviewed_at });
+      db.notifications.push({ id: `notif_${uuidv4()}`, user_id: appeal.appellant_user_id,
+        title: 'Safety appeal decision', message: `Appeal ${appeal.id} is ${outcome}. Any enforcement remains in place pending separate restoration review.`,
+        is_read: false, created_at: appeal.reviewed_at });
+      await saveDatabase(db);
+      res.json({ success: true, outcome, restoration_required: outcome === 'upheld' });
+    } catch (error) {
+      if (error instanceof SafetyInputError) return void res.status(error.status).json({ error: error.message });
+      res.status(503).json({ error: 'Appeal decision could not be saved.' });
+    }
+  });
+
+  // Accepted appeals require a separate, explicitly logged restoration.
+  app.post('/api/admin/safety/appeals/:id/restore', requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const note = limitedText(req.body?.restoration_note, 1000, 'Restoration explanation', 20);
+      const db = normalizeSafetyCollections(loadDatabase());
+      const appeal = db.safety_appeals!.find(item => item.id === req.params.id);
+      if (!appeal || appeal.status !== 'upheld') return void res.status(409).json({ error: 'An upheld appeal is required for restoration.' });
+      if (appeal.restored_at) return void res.status(409).json({ error: 'This appeal has already been restored.' });
+      const report = db.safety_reports!.find(item => item.id === appeal.report_id);
+      if (!report || report.status !== 'actioned' || !report.enforcement_action || report.enforcement_action === 'none') {
+        return void res.status(409).json({ error: 'No active enforcement decision to restore.' });
+      }
+      if (db.safety_reports!.some(other => other.id !== report.id && other.target_type === report.target_type && other.target_id === report.target_id && other.status === 'actioned' && other.enforcement_action === report.enforcement_action && !db.safety_appeals!.some(previous => previous.report_id === other.id && previous.restored_at))) {
+        return void res.status(409).json({ error: 'Another active enforcement case prevents restoration.' });
+      }
+      if (report.enforcement_action === 'hold_movie') {
+        const movie = db.movies.find(item => item.id === report.target_id);
+        if (!movie) return void res.status(404).json({ error: 'Film is missing.' });
+        if (pendingRightsComplaint(db, movie.id)) return void res.status(409).json({ error: 'An unresolved copyright case prevents restoration.' });
+        if (report.reason === 'copyright' && (!movie.rights_review || Date.parse(movie.rights_review.reviewed_at) <= Date.parse(report.created_at))) {
+          return void res.status(409).json({ error: 'Record a fresh independent rights review after the complaint before restoring the film.' });
+        }
+        movie.safety_hold = false;
+      } else if (report.enforcement_action === 'hide_comment') {
+        const comment = db.comments.find(item => item.id === report.target_id);
+        if (!comment) return void res.status(404).json({ error: 'Comment is missing.' });
+        comment.moderation_hidden = false;
+      } else if (report.enforcement_action === 'restrict_creator') {
+        const creator = db.creator_profiles.find(item => item.id === report.target_id);
+        if (!creator) return void res.status(404).json({ error: 'Creator is missing.' });
+        creator.safety_restricted = false;
+      } else if (report.enforcement_action === 'restrict_user') {
+        const user = db.users.find(item => item.id === report.target_id);
+        if (!user) return void res.status(404).json({ error: 'User is missing.' });
+        user.safety_restricted = false;
+      }
+      const now = new Date().toISOString();
+      appeal.restored_at = now;
+      appeal.restoration_reviewer_user_id = req.user!.id;
+      db.audit_logs.push({ id: `aud_${uuidv4()}`, admin_id: req.user!.id, admin_name: req.user!.full_name,
+        action: 'SAFETY_RESTORE_AFTER_APPEAL', target_type: report.target_type, target_id: report.target_id,
+        details: `Appeal ${appeal.id}; decision ${report.id}; operator rationale: ${note}`, created_at: now });
+      db.notifications.push({ id: `notif_${uuidv4()}`, user_id: appeal.appellant_user_id,
+        title: 'Safety appeal restoration completed', message: `Appeal ${appeal.id} has been restored following human review.`,
+        is_read: false, created_at: now });
+      await saveDatabase(db);
+      res.json({ restored: true, restored_at: now });
+    } catch (error) {
+      if (error instanceof SafetyInputError) return void res.status(error.status).json({ error: error.message });
+      res.status(503).json({ error: 'Restoration failed; no changes were confirmed.' });
+    }
+  });
+
+  // -------------------------------------------------------------
   // AUTH ROUTES
   // -------------------------------------------------------------
 
-  app.post('/api/auth/register', async (req: Request, res: Response) => {
-    const { email, password, full_name, phone } = req.body;
-    if (!email || !password || !full_name) {
-      res.status(400).json({ error: 'Email, password, and full name are required.' });
-      return;
-    }
-
-    const db = loadDatabase();
-    const existing = db.users.find(u => u.email.toLowerCase() === email.toLowerCase());
-    if (existing) {
-      res.status(409).json({ error: 'An account with this email address already exists.' });
-      return;
-    }
-
-    const salt = bcrypt.genSaltSync(10);
-    const password_hash = bcrypt.hashSync(password, salt);
-    const newUser: User = {
-      id: `usr_${uuidv4().substring(0, 8)}`,
-      email: email.toLowerCase().trim(),
-      password_hash,
-      full_name: full_name.trim(),
-      avatar_url: `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(full_name)}`,
-      role: 'viewer',
-      wallet_balance: 0,
-      phone: phone?.trim(),
-      created_at: new Date().toISOString(),
-    };
-
-    db.users.push(newUser);
-    await saveDatabase(db);
-
-    const token = jwt.sign({ userId: newUser.id }, JWT_SECRET, { expiresIn: '7d' });
-    res.cookie('visplay_token', token, {
-      httpOnly: true,
-      secure: isProd,
-      sameSite: 'lax',
-      path: '/',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+  // The former endpoint allowed an attacker to create an account for any email
+  // without proving control of it, then retain password access after the real
+  // owner used Google sign-in. Registration now goes through Supabase Auth and
+  // only a verified identity may be synchronized into VisPlay.
+  app.post('/api/auth/register', (_req: Request, res: Response) => {
+    res.status(410).json({
+      error: 'Unverified registration is disabled. Use the verified email sign-up flow.',
     });
-
-    const { password_hash: _, ...safeUser } = newUser;
-    res.status(201).json({ user: safeUser, token });
   });
 
-  app.post('/api/auth/login', (req: Request, res: Response) => {
-    const { email, password } = req.body;
-    if (!email || !password) {
-      res.status(400).json({ error: 'Email and password are required.' });
-      return;
-    }
-
-    const normalizedEmail = String(email).trim().toLowerCase();
-    // Block legacy demo credentials even if an old database snapshot still contains
-    // the seeded demo accounts. Production access must use real account credentials.
-    const legacyDemoCredentials = [
-      ['viewer@visplay.ng', 'viewer123'],
-      ['kunle@nollywood.ng', 'creator123'],
-      ['talk2visibyl@gmail.com', 'admin123'],
-      ['usitakatelvin@gmail.com', 'admin123'],
-    ];
-    if (legacyDemoCredentials.some(([demoEmail, demoPassword]) => normalizedEmail === demoEmail && password === demoPassword)) {
-      res.status(401).json({ error: 'These legacy demo credentials are disabled. Please sign in with your own account.' });
-      return;
-    }
-
-    const db = loadDatabase();
-    const user = db.users.find(u => u.email.toLowerCase() === normalizedEmail);
-    if (!user || !bcrypt.compareSync(password, user.password_hash)) {
-      res.status(401).json({ error: 'Invalid email or password.' });
-      return;
-    }
-
-    const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
-    res.cookie('visplay_token', token, {
-      httpOnly: true,
-      secure: isProd,
-      sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+  // Legacy password hashes include seeded demonstration credentials and cannot
+  // prove email ownership. Do not accept them while existing accounts migrate
+  // to verified Supabase identities. This also blocks every omitted demo login.
+  app.post('/api/auth/login', (_req: Request, res: Response) => {
+    res.status(410).json({
+      error: 'Legacy password login is disabled. Sign in with your verified VisPlay account.',
     });
-
-    const { password_hash: _, ...safeUser } = user;
-    res.json({ user: safeUser, token });
   });
 
   // Supabase Auth Synchronization (Google OAuth & Supabase session sync)
@@ -287,7 +574,7 @@ async function startServer() {
       verifiedSupabaseUser = await verifySupabaseAccessToken(accessToken);
     } catch (verificationError) {
       console.warn('Rejected unverified Supabase identity synchronization.');
-      res.status(401).json({ error: 'Your Google sign-in session could not be verified. Please sign in again.' });
+      res.status(401).json({ error: 'Your verified sign-in session could not be validated. Please sign in again.' });
       return;
     }
 
@@ -297,52 +584,54 @@ async function startServer() {
     const full_name = String(metadata.full_name || metadata.name || cleanEmail.split('@')[0]);
     const avatar_url = String(metadata.avatar_url || metadata.picture || '');
     const db = loadDatabase();
-    let user = db.users.find(u => u.email.toLowerCase() === cleanEmail);
-    const isSuperAdmin = SUPER_ADMIN_EMAILS.some(e => e.toLowerCase() === cleanEmail);
+    // Supabase's stable user ID, not a potentially pre-claimed email address,
+    // determines which internal account the caller may access.
+    const identity = resolveVerifiedIdentity(db.users, verifiedSupabaseUser.id, cleanEmail);
+    if (identity.status === 'email-change') {
+      res.status(409).json({ error: 'Your account email has changed. Contact support for a verified email migration.' });
+      return;
+    }
+    if (identity.status === 'conflict') {
+      res.status(409).json({ error: 'An identity conflict was detected. Contact VisPlay support.' });
+      return;
+    }
+    if (identity.status === 'migration-required') {
+      res.status(409).json({
+        error: 'This email belongs to an existing VisPlay account. Contact support to verify ownership and migrate it securely.',
+      });
+      return;
+    }
+    let user = identity.status === 'existing' ? identity.account : undefined;
 
     if (!user) {
       // Create new user profile for this Supabase/Google authenticated user
-      const role = isSuperAdmin ? 'admin' : 'viewer';
-
       user = {
         id: `usr_${uuidv4().substring(0, 8)}`,
         email: cleanEmail,
-        password_hash: '', // Handled via Supabase OAuth
+        password_hash: '',
+        supabase_auth_id: verifiedSupabaseUser.id,
         full_name: full_name?.trim() || cleanEmail.split('@')[0],
         avatar_url: avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(cleanEmail)}`,
-        role: role,
+        role: 'viewer',
         wallet_balance: 0, // Live accounts always start with zero wallet balance.
         phone: '',
         created_at: new Date().toISOString(),
       };
       db.users.push(user);
     } else {
-      // Existing user: ensure super admin role cannot be lost or tampered with
-      if (isSuperAdmin) {
-        user.role = 'admin';
-      }
+      // The identity is already bound by its verified provider ID.
+      if (user.password_hash) user.password_hash = '';
       if (full_name && !user.full_name) user.full_name = full_name.trim();
       if (avatar_url && (!user.avatar_url || user.avatar_url.includes('dicebear'))) {
         user.avatar_url = avatar_url;
       }
     }
 
-    // Keep creator access attached to the same email if the internal user ID changes.
-    let creatorProfile = db.creator_profiles.find(cp => cp.user_id === user!.id) || null;
-    if (!creatorProfile) {
-      creatorProfile = db.creator_profiles.find(cp => {
-        const owner = db.users.find(candidate => candidate.id === cp.user_id);
-        return owner?.email?.toLowerCase() === cleanEmail;
-      }) || null;
-      if (creatorProfile) creatorProfile.user_id = user!.id;
-    }
-    if (creatorProfile?.status === 'approved' && user.role !== 'admin') {
-      user.role = 'creator';
-    }
+    const creatorProfile = db.creator_profiles.find(cp => cp.user_id === user!.id) || null;
 
     await saveDatabase(db);
 
-    const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
+    const token = jwt.sign({ userId: user.id, authId: user.supabase_auth_id }, JWT_SECRET, { expiresIn: '7d' });
     res.cookie('visplay_token', token, {
       httpOnly: true,
       secure: isProd,
@@ -350,8 +639,9 @@ async function startServer() {
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
-    const { password_hash: _, ...safeUser } = user;
-    res.json({ user: safeUser, creator_profile: creatorProfile || null, token });
+    const { password_hash: _, supabase_auth_id: _authId, ...profileUser } = user;
+    // The session token is available only through the HttpOnly cookie.
+    res.json({ user: { ...profileUser, wallet_balance: await getFinanceStore().getBalance(user.id) }, creator_profile: creatorProfile || null });
   });
 
   app.get('/api/auth/me', async (req: AuthenticatedRequest, res: Response) => {
@@ -366,21 +656,9 @@ async function startServer() {
       return;
     }
 
-    // Recover approved creator access by email if an internal user ID changed.
-    let creatorProfile = db.creator_profiles.find(cp => cp.user_id === freshUser.id) || null;
-    if (!creatorProfile) {
-      creatorProfile = db.creator_profiles.find(cp => {
-        const owner = db.users.find(candidate => candidate.id === cp.user_id);
-        return owner?.email?.toLowerCase() === freshUser.email.toLowerCase();
-      }) || null;
-      if (creatorProfile) creatorProfile.user_id = freshUser.id;
-    }
-    if (creatorProfile?.status === 'approved' && freshUser.role !== 'admin') {
-      freshUser.role = 'creator';
-    }
-    await saveDatabase(db);
-    const { password_hash: _, ...safeUser } = freshUser;
-    res.json({ user: safeUser, creator_profile: creatorProfile });
+    const creatorProfile = db.creator_profiles.find(cp => cp.user_id === freshUser.id) || null;
+    const { password_hash: _, supabase_auth_id: _authId, ...safeUser } = freshUser;
+    res.json({ user: { ...safeUser, wallet_balance: req.user.wallet_balance }, creator_profile: creatorProfile });
   });
 
   app.post('/api/auth/logout', (req: Request, res: Response) => {
@@ -411,13 +689,41 @@ async function startServer() {
     const ownedBundles = creatorId ? db.bundles.filter(bundle => bundle.creator_id === creatorId) : [];
     const ownedBundleIds = new Set(ownedBundles.map(bundle => bundle.id));
 
+    // Refuse accidental forfeiture of funds or removal of previously sold
+    // movies. Settlement/rights transfer must be reviewed before deletion.
+    try {
+      if (req.user!.wallet_balance !== 0) {
+        return void res.status(409).json({ error: 'Please settle or refund your remaining wallet balance before deleting your account.' });
+      }
+      if (creatorId) {
+        const [earnings, payouts] = await Promise.all([
+          getFinanceStore().creatorLedger(creatorId), getFinanceStore().creatorPayouts(creatorId),
+        ]);
+        if (earnings.some(e => e.status !== 'paid') || payouts.some(p => p.status !== 'paid') || earnings.length > 0) {
+          return void res.status(409).json({ error: 'Your channel has financial obligations or sold content. Contact support to settle earnings and transfer existing viewer access before deletion.' });
+        }
+      }
+    } catch (error) {
+      const mapped = financeErrorResponse(error);
+      return void res.status(mapped.status).json({ error: mapped.message });
+    }
+
+    const anonymizedUserId = `deleted_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
+
     // Delete the external Auth identity first. If this fails, do not partially delete app data.
     try {
-      await deleteSupabaseAuthUserByEmail(user.email);
+      await deleteSupabaseAuthUserById(user.supabase_auth_id || '');
     } catch (authDeleteError) {
       console.error('Account deletion could not remove Supabase Auth identity:', authDeleteError);
       res.status(503).json({ error: 'We could not securely finish deleting your sign-in account. No app data was deleted. Please try again later.' });
       return;
+    }
+
+    try {
+      await getFinanceStore().anonymize(user.id, anonymizedUserId, creatorId);
+    } catch (error) {
+      console.error('Deleted Auth account requires financial anonymization recovery:', error);
+      return void res.status(503).json({ error: 'Your sign-in was removed, but financial retention processing needs support intervention. Please contact VisPlay support.' });
     }
 
     // Remove creator-owned media from object storage where the public URLs map to this bucket.
@@ -434,6 +740,13 @@ async function startServer() {
       const uniqueKeys = [...new Set(objectKeys)];
       if (uniqueKeys.length && isR2Configured()) {
         await getR2Client().send(new DeleteObjectsCommand({ Bucket: MEDIA_BUCKET, Delete: { Objects: uniqueKeys.map(Key => ({ Key })) } }));
+      }
+      const privateKeys = [...new Set(ownedMovies.flatMap(movie => [privateVideoKey(movie.video_url), movie.preview_private_key])
+        .filter((key): key is string => Boolean(key)))];
+      if (privateKeys.length) {
+        await getR2Client().send(new DeleteObjectsCommand({
+          Bucket: privateVideoBucket(), Delete: { Objects: privateKeys.map(Key => ({ Key })) },
+        }));
       }
     } catch (storageError) {
       // Continue deletion to respect the user's request; log cleanup for operator follow-up.
@@ -478,7 +791,6 @@ async function startServer() {
     }
 
     // Preserve financial/audit evidence without retaining a direct link to the deleted account.
-    const anonymizedUserId = `deleted_${uuidv4().replace(/-/g, '').slice(0, 16)}`;
     db.transactions.forEach(tx => {
       if (tx.user_id === user.id) tx.user_id = anonymizedUserId;
     });
@@ -533,8 +845,8 @@ async function startServer() {
     }
 
     await saveDatabase(db);
-    const { password_hash: _, ...safeUser } = db.users[userIndex];
-    res.json({ user: safeUser, message: 'Profile updated successfully.' });
+    const { password_hash: _, supabase_auth_id: _authId, ...safeUser } = db.users[userIndex];
+    res.json({ user: { ...safeUser, wallet_balance: req.user!.wallet_balance }, message: 'Profile updated successfully.' });
   });
 
   // -------------------------------------------------------------
@@ -599,89 +911,80 @@ async function startServer() {
     res.status(201).json({ creator_profile: newApplication, message: 'Application submitted successfully.' });
   });
 
-  app.get('/api/creators/my-channel', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+  app.get('/api/creators/my-channel', requireAuth, guardedFinancialRead(async (req: AuthenticatedRequest, res: Response) => {
     const db = loadDatabase();
-    const currentUser = db.users.find(u => u.id === req.user!.id);
-    // OAuth sync can recreate the internal user ID while the creator profile
-    // remains attached to the same email. Resolve that relationship here too.
-    const profile = db.creator_profiles.find(cp => cp.user_id === req.user!.id)
-      || db.creator_profiles.find(cp => {
-        const owner = db.users.find(u => u.id === cp.user_id);
-        return Boolean(currentUser?.email && owner?.email?.toLowerCase() === currentUser.email.toLowerCase());
-      });
+    const profile = db.creator_profiles.find(cp => cp.user_id === req.user!.id);
     if (!profile) {
       res.json({ creator_profile: null, stats: null });
       return;
     }
 
-    if (profile.user_id !== req.user!.id) {
-      profile.user_id = req.user!.id;
-      await saveDatabase(db);
-    }
-
-    if (profile.status === 'approved' && currentUser && currentUser.role !== 'admin') {
-      currentUser.role = 'creator';
-      await saveDatabase(db);
-    }
-
     const movies = db.movies.filter(m => m.creator_id === profile.id);
-    const ledger = db.ledger.filter(l => l.creator_id === profile.id);
-    const payouts = db.payouts.filter(p => p.creator_id === profile.id);
+    const [ledger, payouts, creatorSummary] = await Promise.all([
+      getFinanceStore().creatorLedger(profile.id), getFinanceStore().creatorPayouts(profile.id),
+      getFinanceStore().creatorSummary(profile.id),
+    ]);
     const follows = db.follows.filter(f => f.creator_user_id === profile.id);
 
     const totalViews = movies.reduce((sum, m) => sum + m.views_count, 0);
-    const totalPaidUnlocks = movies.reduce((sum, m) => sum + m.paid_unlocks_count, 0);
-    const totalEarnings = ledger.reduce((sum, l) => sum + l.creator_share_ngn, 0);
-    const totalPaidOut = payouts.filter(p => p.status === 'paid').reduce((sum, p) => sum + p.net_payout_ngn, 0);
-    const pendingBalance = totalEarnings - totalPaidOut;
 
     res.json({
       creator_profile: profile,
-      movies,
+      movies: movies.map(toClientMovie),
       stats: {
         total_movies: movies.length,
         total_views: totalViews,
-        total_paid_unlocks: totalPaidUnlocks,
-        total_earnings_ngn: totalEarnings,
-        total_paid_out_ngn: totalPaidOut,
-        pending_payout_ngn: Math.max(0, pendingBalance),
+        total_paid_unlocks: creatorSummary.total_paid_unlocks,
+        total_earnings_ngn: creatorSummary.total_earnings_ngn,
+        total_paid_out_ngn: creatorSummary.total_paid_out_ngn,
+        pending_payout_ngn: creatorSummary.pending_payout_ngn,
         followers_count: follows.length,
       },
       payouts,
-      ledger: ledger.slice(-20).reverse(),
+      ledger: ledger.slice(0, 20),
     });
-  });
+  }));
 
   app.patch('/api/creators/my-channel/media', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     const db = loadDatabase();
-    const currentUser = db.users.find(u => u.id === req.user!.id);
-    const profile = db.creator_profiles.find(cp => cp.user_id === req.user!.id)
-      || db.creator_profiles.find(cp => {
-        const owner = db.users.find(u => u.id === cp.user_id);
-        return Boolean(currentUser?.email && owner?.email?.toLowerCase() === currentUser.email.toLowerCase());
-      });
+    // Channel ownership is by immutable account ID, never by matching emails.
+    const profile = db.creator_profiles.find(cp => cp.user_id === req.user!.id);
     if (!profile || profile.status !== 'approved') return void res.status(404).json({ error: 'Approved creator channel not found.' });
-    const { channel_avatar_url, channel_banner_url } = req.body || {};
-    const base = String(process.env.R2_PUBLIC_BASE_URL || '').replace(/\/$/, '');
-    const validImageUrl = (value: unknown) => typeof value === 'string' && base.length > 0 && value.startsWith(base + '/posters/') && value.length < 2048;
-    if (channel_avatar_url !== undefined) {
-      if (!validImageUrl(channel_avatar_url)) return void res.status(400).json({ error: 'Invalid profile image URL.' });
-      profile.channel_avatar_url = channel_avatar_url;
+    const { image_upload_id, kind } = req.body || {};
+    if (kind !== 'avatar' && kind !== 'banner') return void res.status(400).json({ error: 'Specify avatar or banner.' });
+    let imageSessionId: string | null = null;
+    let saved = false;
+    try {
+      const session = await uploadSessions.assertActive(String(image_upload_id || ''), req.user!.id, 'ready');
+      if (session.kind !== 'image' || session.usage !== kind || !session.final_key) {
+        return void res.status(403).json({ error: 'This verified image cannot be used for that purpose.' });
+      }
+      await uploadSessions.transition(session.id, req.user!.id, 'ready', 'attaching');
+      imageSessionId = session.id;
+      const url = publicAssetUrl(session.final_key);
+      if (kind === 'avatar') profile.channel_avatar_url = url;
+      else profile.channel_banner_url = url;
+      await saveDatabase(db);
+      saved = true;
+      await uploadSessions.transition(session.id, req.user!.id, 'attaching', 'consumed')
+        .catch(error => console.error('Channel image uploaded but session consumption requires reconciliation:', error));
+      res.json({ success: true, creator_profile: profile });
+    } catch (error) {
+      if (imageSessionId && !saved) {
+        await uploadSessions.transition(imageSessionId, req.user!.id, 'attaching', 'ready').catch(() => undefined);
+      }
+      console.error('Channel image attachment failed:', error);
+      res.status(uploadErrorStatus(error)).json({ error: 'A verified, unused image upload is required.' });
     }
-    if (channel_banner_url !== undefined) {
-      if (!validImageUrl(channel_banner_url)) return void res.status(400).json({ error: 'Invalid cover image URL.' });
-      profile.channel_banner_url = channel_banner_url;
-    }
-    await saveDatabase(db);
-    res.json({ success: true, creator_profile: profile });
   });
 
   // Public directory of approved creators
   app.get('/api/creators', (req: Request, res: Response) => {
     const db = loadDatabase();
-    const approved = db.creator_profiles.filter(cp => cp.status === 'approved');
+    const blocked = blockedCreatorIds(db, (req as AuthenticatedRequest).user?.id);
+    const approved = db.creator_profiles.filter(cp => cp.status === 'approved' && !cp.safety_restricted && !blocked.has(cp.id));
     const creatorsWithStats = approved.map(cp => {
-      const moviesCount = db.movies.filter(m => m.creator_id === cp.id && m.status === 'published').length;
+      const moviesCount = db.movies.filter(m => m.creator_id === cp.id && publiclyVisibleMovie(m)).length;
       const followersCount = db.follows.filter(f => f.creator_user_id === cp.id).length;
       return {
         ...cp,
@@ -692,22 +995,26 @@ async function startServer() {
     res.json({ creators: creatorsWithStats });
   });
 
-  app.get('/api/creators/channel/:id', (req: Request, res: Response) => {
+  app.get('/api/creators/channel/:id', (req: AuthenticatedRequest, res: Response) => {
     const db = loadDatabase();
     const profile = db.creator_profiles.find(cp => cp.id === req.params.id);
-    if (!profile) {
+    if (!profile || profile.status !== 'approved' || profile.safety_restricted || blockedCreatorIds(db, req.user?.id).has(profile.id)) {
       res.status(404).json({ error: 'Creator channel not found.' });
       return;
     }
 
-    const movies = db.movies.filter(m => m.creator_id === profile.id && m.status === 'published');
+    const movies = db.movies.filter(m => m.creator_id === profile.id && publiclyVisibleMovie(m));
     const followersCount = db.follows.filter(f => f.creator_user_id === profile.id).length;
-    res.json({ creator: profile, movies, followers_count: followersCount });
+    res.json({ creator: profile, movies: movies.map(toClientMovie), followers_count: followersCount });
   });
 
   app.post('/api/creators/follow/:id', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    if (req.user!.safety_restricted) return void res.status(403).json({ error: 'Social participation is temporarily restricted. Contact the Safety Center.' });
     const db = loadDatabase();
     const targetCreatorId = req.params.id;
+    const target = db.creator_profiles.find(profile => profile.id === targetCreatorId && profile.status === 'approved' && !profile.safety_restricted);
+    if (!target) return void res.status(404).json({ error: 'Creator unavailable.' });
+    if (blockingUserIds(db, req.user!.id).has(target.user_id)) return void res.status(403).json({ error: 'This account is blocked.' });
     const existingIndex = db.follows.findIndex(
       f => f.follower_user_id === req.user!.id && f.creator_user_id === targetCreatorId
     );
@@ -727,7 +1034,7 @@ async function startServer() {
     }
 
     const targetProfile = db.creator_profiles.find((profile: any) => profile.id === targetCreatorId);
-    const creatorOwnerId = targetProfile?.user_id || targetProfile?.owner_user_id;
+    const creatorOwnerId = targetProfile?.user_id;
     if (isFollowing && creatorOwnerId && creatorOwnerId !== req.user!.id) {
       db.notifications.push({
         id: `notif_${uuidv4().substring(0, 8)}`,
@@ -751,7 +1058,8 @@ async function startServer() {
   app.get('/api/movies', (req: AuthenticatedRequest, res: Response) => {
     const { genre, search, category, creator_id } = req.query;
     const db = loadDatabase();
-    let movies = db.movies.filter(m => m.status === 'published');
+    const blocked = blockedCreatorIds(db, req.user?.id);
+    let movies = db.movies.filter(m => publiclyVisibleMovie(m) && !blocked.has(m.creator_id));
 
     if (creator_id) {
       movies = movies.filter(m => m.creator_id === creator_id);
@@ -776,11 +1084,6 @@ async function startServer() {
       movies = [...movies].sort((a, b) => b.paid_unlocks_count - a.paid_unlocks_count);
     }
 
-    // Check user purchases if logged in
-    const userPurchases = req.user
-      ? db.purchases.filter(p => p.user_id === req.user!.id).map(p => p.item_id)
-      : [];
-
     // Prioritize films from creators the signed-in viewer follows.
     if (req.user) {
       const followedCreatorIds = new Set(db.follows
@@ -793,8 +1096,8 @@ async function startServer() {
       });
     }
     const enhanced = movies.map(m => ({
-      ...m,
-      is_purchased: userPurchases.includes(m.id) || (m.bundle_id && userPurchases.includes(m.bundle_id)),
+      ...toClientMovie(m),
+      is_purchased: ownsFullMovie(m, req.user, req.financialPurchases || [], db.creator_profiles),
     }));
 
     res.json({ movies: enhanced, total: enhanced.length });
@@ -805,11 +1108,11 @@ async function startServer() {
     const db = loadDatabase();
     let movie: Movie | undefined;
     if (db.featured_movie_id) {
-      movie = db.movies.find(m => m.id === db.featured_movie_id && m.status === 'published');
+      movie = db.movies.find(m => m.id === db.featured_movie_id && publiclyVisibleMovie(m) && !blockedCreatorIds(db, req.user?.id).has(m.creator_id));
     }
     // Fallback if not configured or removed
     if (!movie) {
-      movie = db.movies.find(m => m.id === 'mov_lagos_syndicate') || db.movies.find(m => m.status === 'published' && !m.is_bundle_only);
+      movie = db.movies.find(m => m.id === 'mov_lagos_syndicate' && publiclyVisibleMovie(m) && !blockedCreatorIds(db, req.user?.id).has(m.creator_id)) || db.movies.find(m => publiclyVisibleMovie(m) && !m.is_bundle_only && !blockedCreatorIds(db, req.user?.id).has(m.creator_id));
     }
 
     if (!movie) {
@@ -818,14 +1121,11 @@ async function startServer() {
     }
 
     const creator = db.creator_profiles.find(cp => cp.id === movie!.creator_id);
-    const isPurchased = req.user
-      ? db.purchases.some(p => p.user_id === req.user!.id && (p.item_id === movie!.id || (movie!.bundle_id && p.item_id === movie!.bundle_id))) ||
-        req.user.role === 'admin'
-      : false;
+    const isPurchased = ownsFullMovie(movie, req.user, req.financialPurchases || [], db.creator_profiles);
 
     res.json({
       movie: {
-        ...movie,
+        ...toClientMovie(movie),
         is_purchased: isPurchased,
       },
       creator: creator || null,
@@ -879,13 +1179,14 @@ async function startServer() {
   // Curated Horizontal Categories
   app.get('/api/movies/categories', (req: AuthenticatedRequest, res: Response) => {
     const db = loadDatabase();
-    const published = db.movies.filter(m => m.status === 'published' && !m.is_bundle_only);
-    const userPurchases = req.user ? db.purchases.filter(p => p.user_id === req.user!.id).map(p => p.item_id) : [];
+    const excluded = blockedCreatorIds(db, req.user?.id);
+    const published = db.movies.filter(m => publiclyVisibleMovie(m) && !m.is_bundle_only && !excluded.has(m.creator_id));
+    const userPurchases = (req.financialPurchases || []).map(p => p.item_id);
 
     const enhance = (list: Movie[]) =>
       list.map(m => ({
-        ...m,
-        is_purchased: userPurchases.includes(m.id) || (m.bundle_id && userPurchases.includes(m.bundle_id)),
+        ...toClientMovie(m),
+        is_purchased: ownsFullMovie(m, req.user, req.financialPurchases || [], db.creator_profiles),
       }));
 
     // Continue Watching from viewing events if user is authenticated
@@ -895,7 +1196,7 @@ async function startServer() {
         .filter(e => e.user_id === req.user!.id)
         .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
       const recentMovieIds = Array.from(new Set(userEvents.map(e => e.movie_id)));
-      continueWatching = enhance(db.movies.filter(m => recentMovieIds.includes(m.id)).slice(0, 8));
+      continueWatching = enhance(db.movies.filter(m => recentMovieIds.includes(m.id) && publiclyVisibleMovie(m) && !excluded.has(m.creator_id)).slice(0, 8));
     }
 
     const trending = enhance([...published].sort((a, b) => b.views_count - a.views_count));
@@ -914,7 +1215,7 @@ async function startServer() {
     // 10-episode series bundles
     const bundles = db.bundles.map(b => ({
       ...b,
-      episodes: db.movies.filter(m => m.bundle_id === b.id),
+      episodes: db.movies.filter(m => m.bundle_id === b.id && publiclyVisibleMovie(m)).map(toClientMovie),
       is_purchased: userPurchases.includes(b.id),
     }));
 
@@ -942,21 +1243,13 @@ async function startServer() {
       res.status(404).json({ error: 'Movie not found.' });
       return;
     }
-
-    // Preserve legacy uploads where possible, and persist the migrated URLs.
-    const oldVideoUrl = movie.video_url;
-    const oldPosterUrl = movie.poster_url;
-    const [videoUrl, posterUrl] = await Promise.all([
-      migrateLegacyMediaUrl(movie.video_url),
-      migrateLegacyMediaUrl(movie.poster_url),
-    ]);
-    if (videoUrl && videoUrl !== oldVideoUrl) movie.video_url = videoUrl;
-    if (posterUrl && posterUrl !== oldPosterUrl) {
-      movie.poster_url = posterUrl;
-      if (movie.backdrop_url === oldPosterUrl || !movie.backdrop_url) movie.backdrop_url = posterUrl;
+    if (movie.safety_hold || (blockedCreatorIds(db, req.user?.id).has(movie.creator_id) && !ownsFullMovie(movie, req.user, req.financialPurchases || [], db.creator_profiles))) {
+      res.status(404).json({ error: 'Movie unavailable.' });
+      return;
     }
-    if (movie.video_url !== oldVideoUrl || movie.poster_url !== oldPosterUrl) {
-      await saveDatabase(db);
+    if (movie.status !== 'published' && !ownsFullMovie(movie, req.user, req.financialPurchases || [], db.creator_profiles)) {
+      res.status(404).json({ error: 'Movie not found.' });
+      return;
     }
 
     const creator = db.creator_profiles.find(cp => cp.id === movie.creator_id);
@@ -964,41 +1257,34 @@ async function startServer() {
     const isLiked = req.user ? db.likes.some(l => l.movie_id === movie.id && l.user_id === req.user!.id) : false;
     
     // Check if user purchased movie or bundle containing movie
-    const isPurchased = req.user
-      ? db.purchases.some(p =>
-          p.user_id === req.user!.id &&
-          (p.item_id === movie.id || (movie.bundle_id && p.item_id === movie.bundle_id))
-        ) ||
-        (creator && creator.user_id === req.user.id) ||
-        req.user.role === 'admin'
-      : false;
+    const isPurchased = ownsFullMovie(movie, req.user, req.financialPurchases || [], db.creator_profiles);
 
     const isFollowing = req.user && creator
       ? db.follows.some(f => f.follower_user_id === req.user!.id && f.creator_user_id === creator.id)
       : false;
 
     // Related creator movies
-    const related = db.movies.filter(m => m.creator_id === movie.creator_id && m.id !== movie.id && m.status === 'published').slice(0, 4);
+    const related = db.movies.filter(m => m.creator_id === movie.creator_id && m.id !== movie.id && publiclyVisibleMovie(m)).slice(0, 4);
 
     res.json({
       movie: {
-        ...movie,
+        ...toClientMovie(movie),
         is_purchased: isPurchased,
         likes_count: likesCount,
         is_liked: isLiked,
       },
       creator,
       is_following: isFollowing,
-      related,
+      related: related.map(toClientMovie),
     });
   });
 
   app.get('/api/bundles', (req: AuthenticatedRequest, res: Response) => {
     const db = loadDatabase();
-    const userPurchases = req.user ? db.purchases.filter(p => p.user_id === req.user!.id).map(p => p.item_id) : [];
+    const userPurchases = (req.financialPurchases || []).map(p => p.item_id);
 
     const bundles = db.bundles.map(b => {
-      const episodes = db.movies.filter(m => m.bundle_id === b.id);
+      const episodes = db.movies.filter(m => m.bundle_id === b.id && publiclyVisibleMovie(m)).map(toClientMovie);
       const isPurchased = userPurchases.includes(b.id);
       return {
         ...b,
@@ -1017,144 +1303,128 @@ async function startServer() {
       res.status(404).json({ error: 'Bundle not found.' });
       return;
     }
-    const episodes = db.movies.filter(m => m.bundle_id === bundle.id);
+    const episodes = db.movies.filter(m => m.bundle_id === bundle.id && publiclyVisibleMovie(m)).map(toClientMovie);
     const creator = db.creator_profiles.find(cp => cp.id === bundle.creator_id);
-    const isPurchased = req.user ? db.purchases.some(p => p.user_id === req.user!.id && p.item_id === bundle.id) : false;
+    const isPurchased = (req.financialPurchases || []).some(p => p.item_type === 'bundle' && p.item_id === bundle.id);
 
     res.json({ bundle: { ...bundle, episodes, is_purchased: isPurchased }, creator });
   });
 
-  // Create a short-lived direct-to-R2 upload URL for large media files.
-  app.post('/api/movies/upload-url', requireCreator, async (req: AuthenticatedRequest, res: Response) => {
-    const { folder, filename, contentType, size } = req.body || {};
-    if (folder !== 'videos' && folder !== 'posters') return void res.status(400).json({ error: 'Invalid upload type.' });
-    const maxSize = folder === 'videos' ? 500 * 1024 * 1024 : 15 * 1024 * 1024;
-    if (!Number.isFinite(Number(size)) || Number(size) <= 0 || Number(size) > maxSize) {
-      return void res.status(400).json({ error: folder === 'videos' ? 'Video must be 500MB or smaller.' : 'Poster must be 15MB or smaller.' });
-    }
+  const buckets = () => ({ privateBucket: privateVideoBucket(), publicBucket: MEDIA_BUCKET });
+  // Temporary rate limit per process; the DB upload-quota RPC is the cross-pod
+  // control. Add a Cloudflare WAF/edge rule for source-IP distributed abuse.
+  const uploadRequests = new Map<string, { count: number; reset: number }>();
+  const limitUploadRequests = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    const userKey = req.user?.id || req.ip || 'unknown';
+    const now = Date.now();
+    if (uploadRequests.size > 5000) for (const [key, slot] of uploadRequests) if (slot.reset < now) uploadRequests.delete(key);
+    const slot = uploadRequests.get(userKey);
+    if (!slot || slot.reset < now) uploadRequests.set(userKey, { count: 1, reset: now + 60_000 });
+    else if (++slot.count > 140) return void res.status(429).json({ error: 'Too many upload requests. Please wait a moment.' });
+    next();
+  };
+
+  app.post('/api/movies/upload-url', requireCreator, limitUploadRequests, async (req: AuthenticatedRequest, res: Response) => {
+    let spec;
     try {
-      if (!isR2Configured()) throw new Error('Cloudflare R2 credentials are missing from the server environment.');
-      const ext = path.extname(String(filename || '')).toLowerCase().replace(/[^.a-z0-9]/g, '') || (folder === 'videos' ? '.mp4' : '.jpg');
-      const objectPath = `${folder}/${req.user!.id}/${Date.now()}-${uuidv4()}${ext}`;
-      const command = new PutObjectCommand({ Bucket: MEDIA_BUCKET, Key: objectPath, ContentType: String(contentType || (folder === 'videos' ? 'video/mp4' : 'image/jpeg')) });
-      const uploadUrl = await getSignedUrl(getR2Client(), command, { expiresIn: 900 });
-      res.json({ uploadUrl, path: objectPath, publicUrl: getR2PublicUrl(objectPath) });
+      spec = parseUploadSpec(req.body);
+      if (spec.multipart) return void res.status(400).json({ error: 'Use the multipart uploader for video files larger than 16 MB.' });
+    } catch (error) { return void res.status(400).json({ error: (error as Error).message }); }
+    try {
+      res.json(await prepareUpload(getR2Client(), uploadSessions, buckets(), req.user!.id, spec));
     } catch (error) {
-      console.error('Could not prepare direct R2 media upload:', error);
-      res.status(503).json({ error: 'R2 upload setup failed: ' + (error instanceof Error ? error.message : 'Unknown storage error') });
+      console.error('Media upload reservation failed:', error);
+      res.status(uploadErrorStatus(error)).json({ error: 'Could not reserve an upload. Check your upload quota and try later.' });
     }
   });
 
-  // Resumable multipart uploads for large creator videos. Each part can be retried independently.
-  app.post('/api/movies/multipart/init', requireCreator, async (req: AuthenticatedRequest, res: Response) => {
-    const { folder, filename, contentType, size } = req.body || {};
-    if (folder !== 'videos' && folder !== 'posters') return void res.status(400).json({ error: 'Invalid upload type.' });
-    const maxSize = folder === 'videos' ? 500 * 1024 * 1024 : 15 * 1024 * 1024;
-    if (!Number.isFinite(Number(size)) || Number(size) <= 0 || Number(size) > maxSize) {
-      return void res.status(400).json({ error: folder === 'videos' ? 'Video must be 500MB or smaller.' : 'Poster must be 15MB or smaller.' });
-    }
+  app.post('/api/movies/multipart/init', requireCreator, limitUploadRequests, async (req: AuthenticatedRequest, res: Response) => {
+    let spec;
     try {
-      if (!isR2Configured()) throw new Error('Cloudflare R2 credentials are missing from the server environment.');
-      const ext = path.extname(String(filename || '')).toLowerCase().replace(/[^.a-z0-9]/g, '') || (folder === 'videos' ? '.mp4' : '.jpg');
-      const key = `${folder}/${req.user!.id}/${Date.now()}-${uuidv4()}${ext}`;
-      const created = await getR2Client().send(new CreateMultipartUploadCommand({
-        Bucket: MEDIA_BUCKET,
-        Key: key,
-        ContentType: String(contentType || (folder === 'videos' ? 'video/mp4' : 'image/jpeg')),
-        CacheControl: 'public, max-age=31536000, immutable',
-      }));
-      if (!created.UploadId) throw new Error('Storage did not return an upload session.');
-      res.json({ uploadId: created.UploadId, key, publicUrl: getR2PublicUrl(key) });
+      spec = parseUploadSpec(req.body);
+      if (!spec.multipart) return void res.status(400).json({ error: 'Use a single upload for this file.' });
+    } catch (error) { return void res.status(400).json({ error: (error as Error).message }); }
+    try {
+      res.json(await prepareUpload(getR2Client(), uploadSessions, buckets(), req.user!.id, spec));
     } catch (error) {
-      console.error('Could not start multipart R2 upload:', error);
-      res.status(503).json({ error: 'Could not start a resumable upload. Please try again.' });
+      console.error('Multipart upload reservation failed:', error);
+      res.status(uploadErrorStatus(error)).json({ error: 'Could not reserve a video upload. Check your quota and try later.' });
     }
   });
 
-  app.post('/api/movies/multipart/part-url', requireCreator, async (req: AuthenticatedRequest, res: Response) => {
-    const { key, uploadId, partNumber } = req.body || {};
-    const ownsKey = typeof key === 'string' && (key.startsWith(`videos/${req.user!.id}/`) || key.startsWith(`posters/${req.user!.id}/`));
-    if (!ownsKey || typeof uploadId !== 'string' || !Number.isInteger(partNumber) || partNumber < 1 || partNumber > 10000) {
-      return void res.status(400).json({ error: 'Invalid upload part request.' });
-    }
+  app.post('/api/movies/multipart/part-url', requireCreator, limitUploadRequests, async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const uploadUrl = await getSignedUrl(getR2Client(), new UploadPartCommand({
-        Bucket: MEDIA_BUCKET, Key: key, UploadId: uploadId, PartNumber: partNumber,
-      }), { expiresIn: 900 });
-      res.json({ uploadUrl });
+      res.json(await signUploadPart(getR2Client(), uploadSessions, buckets(), req.user!.id,
+        String(req.body?.sessionId || ''), req.body?.partNumber));
+    } catch (error) { res.status(uploadErrorStatus(error)).json({ error: 'Upload part is not authorized or has expired.' }); }
+  });
+
+  app.post('/api/movies/multipart/complete', requireCreator, limitUploadRequests, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const result = await completeMultipart(getR2Client(), uploadSessions, buckets(), req.user!.id,
+        String(req.body?.sessionId || ''), req.body?.parts);
+      res.json(result);
     } catch (error) {
-      console.error('Could not prepare multipart upload part:', error);
-      res.status(503).json({ error: 'Could not prepare an upload part. Please retry.' });
+      console.error('Multipart completion or validation failed:', error);
+      res.status(uploadErrorStatus(error)).json({ error: 'Could not securely verify the uploaded parts. Please check your file and retry.' });
     }
   });
 
-  app.post('/api/movies/multipart/complete', requireCreator, async (req: AuthenticatedRequest, res: Response) => {
-    const { key, uploadId, parts } = req.body || {};
-    const ownsKey = typeof key === 'string' && (key.startsWith(`videos/${req.user!.id}/`) || key.startsWith(`posters/${req.user!.id}/`));
-    if (!ownsKey || typeof uploadId !== 'string' || !Array.isArray(parts) || parts.length === 0 ||
-        parts.some((part: any) => !Number.isInteger(part.PartNumber) || part.PartNumber < 1 || typeof part.ETag !== 'string')) {
-      return void res.status(400).json({ error: 'Invalid multipart completion request.' });
-    }
+  app.post('/api/movies/uploads/complete', requireCreator, limitUploadRequests, async (req: AuthenticatedRequest, res: Response) => {
     try {
-      await getR2Client().send(new CompleteMultipartUploadCommand({
-        Bucket: MEDIA_BUCKET, Key: key, UploadId: uploadId,
-        MultipartUpload: { Parts: parts.sort((a: any, b: any) => a.PartNumber - b.PartNumber) },
-      }));
-      res.json({ publicUrl: getR2PublicUrl(key) });
+      res.json(await finalizeUpload(getR2Client(), uploadSessions, buckets(), req.user!.id,
+        String(req.body?.sessionId || '')));
     } catch (error) {
-      console.error('Could not complete multipart R2 upload:', error);
-      res.status(503).json({ error: 'Storage could not complete the video upload. Please retry.' });
+      console.error('Direct-upload file validation failed:', error);
+      res.status(uploadErrorStatus(error)).json({ error: 'Upload failed file verification. Check the file type and size before retrying.' });
     }
   });
 
-  app.post('/api/movies/multipart/abort', requireCreator, async (req: AuthenticatedRequest, res: Response) => {
-    const { key, uploadId } = req.body || {};
-    const ownsKey = typeof key === 'string' && (key.startsWith(`videos/${req.user!.id}/`) || key.startsWith(`posters/${req.user!.id}/`));
-    if (!ownsKey || typeof uploadId !== 'string') return void res.status(400).json({ error: 'Invalid upload cancellation request.' });
+  app.post('/api/movies/multipart/abort', requireCreator, limitUploadRequests, async (req: AuthenticatedRequest, res: Response) => {
     try {
-      await getR2Client().send(new AbortMultipartUploadCommand({ Bucket: MEDIA_BUCKET, Key: key, UploadId: uploadId }));
+      await abortUpload(getR2Client(), uploadSessions, buckets(), req.user!.id, String(req.body?.sessionId || ''));
       res.json({ ok: true });
-    } catch (error) {
-      console.error('Could not abort multipart R2 upload:', error);
-      res.status(200).json({ ok: true });
-    }
+    } catch (error) { res.status(uploadErrorStatus(error)).json({ error: 'Could not cancel the upload. Please contact support if it persists.' }); }
   });
 
   // Movie Upload (Creators Only)
   app.post(
     '/api/movies/upload',
     requireCreator,
-    movieMediaUpload.fields([
-      { name: 'video', maxCount: 1 },
-      { name: 'poster', maxCount: 1 },
-    ]),
+    movieMediaUpload.none(),
     async (req: AuthenticatedRequest, res: Response) => {
-      const { title, synopsis, genre, release_year, rights_confirmed } = req.body;
+      const { title, synopsis, genre, release_year } = req.body;
       if (!title || !synopsis || !genre) {
         res.status(400).json({ error: 'Title, synopsis, and genre are required.' });
         return;
       }
-      if (rights_confirmed !== 'true' && rights_confirmed !== true) {
-        res.status(400).json({ error: 'You must confirm movie distribution ownership/rights.' });
-        return;
-      }
+      let rightsAttestation;
+      try { rightsAttestation = parseRightsAttestation(req.body, req.user!.id); }
+      catch (error) { return void res.status(400).json({ error: error instanceof Error ? error.message : 'Rights declaration required.' }); }
+      const contentRating = req.body?.content_rating;
+      if (!CONTENT_RATINGS.includes(contentRating)) return void res.status(400).json({ error: 'A valid content/age rating is required.' });
 
-      const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
-      const videoFile = files?.video?.[0];
-      const posterFile = files?.poster?.[0];
-      const submittedVideoUrl = typeof req.body.video_url === 'string' ? req.body.video_url : '';
-      const submittedPosterUrl = typeof req.body.poster_url === 'string' ? req.body.poster_url : '';
-      const publicMediaPrefix = `${(process.env.R2_PUBLIC_BASE_URL || '').replace(/\/+$/, '')}/`;
-      if (submittedVideoUrl && !submittedVideoUrl.startsWith(publicMediaPrefix)) {
-        res.status(400).json({ error: 'Invalid video storage URL.' });
-        return;
-      }
-      if (submittedPosterUrl && !submittedPosterUrl.startsWith(publicMediaPrefix)) {
-        res.status(400).json({ error: 'Invalid poster storage URL.' });
-        return;
-      }
+      let videoSession;
+      let posterSession;
+      try {
+        videoSession = await uploadSessions.assertActive(String(req.body.video_upload_id || ''), req.user!.id, 'ready');
+        if (videoSession.kind !== 'video' || videoSession.usage !== 'movie' || !videoSession.final_key) {
+          return void res.status(403).json({ error: 'This upload cannot be used as a movie master.' });
+        }
+        if (req.body.poster_upload_id) {
+          posterSession = await uploadSessions.assertActive(String(req.body.poster_upload_id), req.user!.id, 'ready');
+          if (posterSession.kind !== 'image' || posterSession.usage !== 'poster' || !posterSession.final_key) {
+            return void res.status(403).json({ error: 'This upload cannot be used as a movie poster.' });
+          }
+        }
+      } catch (error) { return void res.status(uploadErrorStatus(error)).json({ error: 'Submit verified upload session IDs for your movie and poster.' }); }
+      const videoUrl = `private://${videoSession.final_key}`;
 
       const db = loadDatabase();
+      if (db.movies.some(existing => existing.video_url === videoUrl)) {
+        res.status(409).json({ error: 'This video has already been submitted.' });
+        return;
+      }
       const creatorProfile = db.creator_profiles.find(cp => cp.user_id === req.user!.id);
       if (!creatorProfile && req.user!.role !== 'admin') {
         res.status(403).json({ error: 'Creator channel profile not found.' });
@@ -1165,19 +1435,18 @@ async function startServer() {
       const creatorName = creatorProfile ? creatorProfile.channel_name : req.user!.full_name;
       const creatorAvatar = creatorProfile ? creatorProfile.channel_avatar_url : req.user!.avatar_url;
 
-      let videoUrl = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4';
       let posterUrl = '/posters/lagos_heist.jpg';
 
       try {
-        if (submittedVideoUrl) videoUrl = submittedVideoUrl;
-        else if (videoFile) videoUrl = await storeMovieMedia(videoFile, 'videos');
-        if (submittedPosterUrl) posterUrl = submittedPosterUrl;
-        else if (posterFile) posterUrl = await storeMovieMedia(posterFile, 'posters');
+        const object = await getR2Client().send(new HeadObjectCommand({ Bucket: privateVideoBucket(), Key: videoSession.final_key }));
+        if (object.ContentLength !== videoSession.expected_size || object.ContentLength > MAX_VIDEO_BYTES || object.ContentType?.split(';')[0] !== 'video/mp4') {
+          res.status(415).json({ error: 'Verified movie master is missing or has changed.' });
+          return;
+        }
+        if (posterSession) posterUrl = publicAssetUrl(posterSession.final_key!);
       } catch (storageError) {
         console.error('Permanent movie media upload failed:', storageError);
-        res.status(503).json({
-          error: 'Permanent media storage failed: ' + (storageError instanceof Error ? storageError.message : 'unknown storage error'),
-        });
+        res.status(503).json({ error: 'Verified media is temporarily unavailable. Please retry.' });
         return;
       }
 
@@ -1190,12 +1459,14 @@ async function startServer() {
         synopsis: synopsis.trim(),
         genre: genre.trim(),
         release_year: release_year ? parseInt(release_year, 10) : new Date().getFullYear(),
-        duration_seconds: Math.max(1, Math.min(86400, Math.floor(Number(req.body.duration_seconds) || 3600))),
+        duration_seconds: 3600, // standard runtime estimation
         poster_url: posterUrl,
         backdrop_url: posterUrl,
         video_url: videoUrl,
         is_bundle_only: false,
         status: 'pending', // enters moderation queue
+        rights_attestation: rightsAttestation,
+        content_rating: contentRating,
         views_count: 0,
         paid_unlocks_count: 0,
         price_ngn: 100, // fixed ₦100
@@ -1203,20 +1474,38 @@ async function startServer() {
         created_at: new Date().toISOString(),
       };
 
-      db.movies.push(newMovie);
-
-      // Notification
-      db.notifications.push({
-        id: `notif_${uuidv4().substring(0, 8)}`,
-        user_id: req.user!.id,
-        title: 'Movie Submitted for Moderation',
-        message: `"${title}" has entered the VisPlay moderation queue. You will be notified once reviewed.`,
-        is_read: false,
-        created_at: new Date().toISOString(),
-      });
-
-      await saveDatabase(db);
-      res.status(201).json({ movie: newMovie, message: 'Movie submitted successfully for review.' });
+      const reservedSessionIds: string[] = [];
+      try {
+        // Claim verified media by compare-and-swap before inserting the movie.
+        // Concurrent requests cannot use a single upload to create two titles.
+        await uploadSessions.transition(videoSession.id, req.user!.id, 'ready', 'attaching');
+        reservedSessionIds.push(videoSession.id);
+        if (posterSession) {
+          await uploadSessions.transition(posterSession.id, req.user!.id, 'ready', 'attaching');
+          reservedSessionIds.push(posterSession.id);
+        }
+        db.movies.push(newMovie);
+        db.notifications.push({
+          id: `notif_${uuidv4().substring(0, 8)}`,
+          user_id: req.user!.id,
+          title: 'Movie Submitted for Moderation',
+          message: `"${title}" has entered the VisPlay moderation queue. You will be notified once reviewed.`,
+          is_read: false,
+          created_at: new Date().toISOString(),
+        });
+        await saveDatabase(db);
+      } catch (error) {
+        for (const id of reservedSessionIds) {
+          await uploadSessions.transition(id, req.user!.id, 'attaching', 'ready').catch(() => undefined);
+        }
+        console.error('Movie creation or upload claim failed:', error);
+        return void res.status(503).json({ error: 'Could not safely complete movie submission. Please check the library before retrying.' });
+      }
+      for (const id of reservedSessionIds) {
+        await uploadSessions.transition(id, req.user!.id, 'attaching', 'consumed')
+          .catch(error => console.error('Movie saved but media session needs reconciliation:', error));
+      }
+      res.status(201).json({ movie: toClientMovie(newMovie), message: 'Movie submitted successfully for review.' });
     }
   );
 
@@ -1261,22 +1550,36 @@ async function startServer() {
   });
 
   // Comments
-  app.get('/api/movies/:id/comments', (req: Request, res: Response) => {
+  app.get('/api/movies/:id/comments', (req: AuthenticatedRequest, res: Response) => {
     const db = loadDatabase();
+    if (!db.movies.some(movie => movie.id === req.params.id && publiclyVisibleMovie(movie))) return void res.status(404).json({ error: 'Movie unavailable.' });
+    const excluded = blockingUserIds(db, req.user?.id);
     const comments = db.comments
-      .filter(c => c.movie_id === req.params.id)
+      .filter(c => c.movie_id === req.params.id && !c.moderation_hidden && !excluded.has(c.user_id))
       .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     res.json({ comments });
   });
 
   app.post('/api/movies/:id/comments', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
-    const { comment_text, parent_id } = req.body;
-    if (!comment_text || !comment_text.trim()) {
-      res.status(400).json({ error: 'Comment text cannot be empty.' });
-      return;
-    }
+    if (req.user!.safety_restricted) return void res.status(403).json({ error: 'Commenting is temporarily restricted. Contact the Safety Center.' });
+    const { parent_id } = req.body;
+    let commentText: string;
+    try { commentText = validatePublicComment(req.body?.comment_text, req.body?.content_policy_accepted); }
+    catch (error) { return void res.status(400).json({ error: error instanceof Error ? error.message : 'Comment rejected.' }); }
 
     const db = loadDatabase();
+    const priorComments = db.comments.filter(comment => comment.user_id === req.user!.id && Date.parse(comment.created_at) > Date.now() - 24 * 60 * 60 * 1000);
+    if (priorComments.length >= 30) return void res.status(429).json({ error: 'Daily comment limit reached.' });
+    if (priorComments.some(comment => comment.movie_id === req.params.id && comment.comment_text.toLowerCase() === commentText.toLowerCase() && Date.parse(comment.created_at) > Date.now() - 5 * 60 * 1000)) {
+      return void res.status(409).json({ error: 'Please do not post a duplicate comment.' });
+    }
+    const movieForComment = db.movies.find(movie => movie.id === req.params.id && publiclyVisibleMovie(movie));
+    if (!movieForComment) return void res.status(404).json({ error: 'Movie unavailable for comments.' });
+    const ownerProfile = db.creator_profiles.find(profile => profile.id === movieForComment.creator_id);
+    if (ownerProfile && blockingUserIds(db, req.user!.id).has(ownerProfile.user_id)) return void res.status(403).json({ error: 'This account is blocked.' });
+    if (parent_id && !db.comments.some(comment => comment.id === parent_id && comment.movie_id === req.params.id && !comment.moderation_hidden && !blockingUserIds(db, req.user!.id).has(comment.user_id))) {
+      return void res.status(400).json({ error: 'Reply target is unavailable.' });
+    }
     const newComment: Comment = {
       id: `com_${uuidv4().substring(0, 8)}`,
       movie_id: req.params.id,
@@ -1284,7 +1587,8 @@ async function startServer() {
       user_name: req.user!.full_name,
       user_avatar: req.user!.avatar_url,
       parent_id: parent_id || null,
-      comment_text: comment_text.trim(),
+      comment_text: commentText,
+      content_rules_accepted_version: '2026-11-11',
       likes_count: 0,
       created_at: new Date().toISOString(),
     };
@@ -1317,11 +1621,12 @@ async function startServer() {
   });
 
   app.post('/api/movies/:id/comments/:commentId/reaction', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    if (req.user!.safety_restricted) return void res.status(403).json({ error: 'Social participation is temporarily restricted.' });
     const reaction = req.body?.reaction;
     if (reaction !== 'like' && reaction !== 'dislike') return void res.status(400).json({ error: 'Choose like or dislike.' });
     const db = loadDatabase();
     const comment = db.comments.find(c => c.id === req.params.commentId && c.movie_id === req.params.id);
-    if (!comment) return void res.status(404).json({ error: 'Comment not found.' });
+    if (!comment || comment.moderation_hidden || blockingUserIds(db, req.user!.id).has(comment.user_id)) return void res.status(404).json({ error: 'Comment not found.' });
     const extended = comment as Comment & { liked_by?: string[]; disliked_by?: string[]; dislikes_count?: number };
     extended.liked_by ||= [];
     extended.disliked_by ||= [];
@@ -1382,33 +1687,77 @@ async function startServer() {
   // SECURE STREAMING & VIEWING ANALYTICS
   // -------------------------------------------------------------
 
-  app.get('/api/media/stream/:id', (req: AuthenticatedRequest, res: Response) => {
+  const handleMovieStream = async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     const db = loadDatabase();
     const movie = db.movies.find(m => m.id === req.params.id);
-    if (!movie) {
+    if (!movie || movie.safety_hold) {
       res.status(404).json({ error: 'Movie not found.' });
       return;
     }
 
-    const isPurchased = req.user
-      ? db.purchases.some(
-          p =>
-            p.user_id === req.user!.id &&
-            (p.item_id === movie.id || (movie.bundle_id && p.item_id === movie.bundle_id))
-        ) ||
-        req.user.role === 'admin' ||
-        db.creator_profiles.some(cp => cp.id === movie.creator_id && cp.user_id === req.user!.id)
-      : false;
+    const mode = req.query.mode === 'full' ? 'full' : req.query.mode === 'preview' ? 'preview' : null;
+    if (!mode) {
+      res.status(400).json({ error: 'Choose preview or full playback mode.' });
+      return;
+    }
+    const decision = authorizeMovieStream(movie, req.user, req.financialPurchases || [], db.creator_profiles, mode);
+    if (decision.status === 'not-found') return void res.status(404).json({ error: 'Movie not found.' });
+    if (decision.status === 'forbidden') return void res.status(403).json({ error: 'Purchase this movie or bundle to view the full film.' });
+    if (decision.status === 'not-ready') return void res.status(423).json({ error: 'Secure media is not ready. Please try again after processing.' });
 
-    // Check query token or header
-    res.json({
-      video_url: movie.video_url,
-      is_purchased: isPurchased,
-      free_preview_seconds: movie.free_preview_seconds || 300, // 5 mins
-      movie_id: movie.id,
-      title: movie.title,
-    });
-  });
+    // The source bucket must be private with neither custom-domain nor r2.dev
+    // public access. An app check cannot revoke previously shared public URLs;
+    // operators must copy legacy objects and disable the old access path.
+    const range = req.headers.range;
+    if (range && !/^bytes=(?:\d+-\d*|-\d+)$/.test(range)) {
+      res.status(416).json({ error: 'Invalid or multi-part byte range.' });
+      return;
+    }
+
+    try {
+      const bucket = privateVideoBucket();
+      const client = getR2Client();
+      res.setHeader('Cache-Control', 'private, no-store, no-cache, max-age=0');
+      res.setHeader('Vary', 'Cookie, Authorization');
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Content-Type', 'video/mp4');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+
+      if (req.method === 'HEAD') {
+        const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: decision.key }));
+        if (head.ContentLength !== undefined) res.setHeader('Content-Length', String(head.ContentLength));
+        res.status(200).end();
+        return;
+      }
+
+      const object = await client.send(new GetObjectCommand({ Bucket: bucket, Key: decision.key, Range: range }));
+      if (range && !object.ContentRange) throw new Error('Storage ignored a requested byte range.');
+      if (object.ContentRange) res.setHeader('Content-Range', object.ContentRange);
+      if (object.ContentLength !== undefined) res.setHeader('Content-Length', String(object.ContentLength));
+      const body = object.Body as unknown as Readable | undefined;
+      if (!body || typeof body.pipe !== 'function') throw new Error('Storage returned no readable video body.');
+
+      body.on('error', error => {
+        console.error('Private video transfer failed:', error);
+        if (!res.headersSent) res.status(502).end();
+        else res.destroy(error);
+      });
+      res.on('close', () => body.destroy());
+      res.status(object.ContentRange ? 206 : 200);
+      body.pipe(res);
+    } catch (error: any) {
+      if (res.headersSent) return;
+      if (error?.name === 'InvalidRange' || error?.$metadata?.httpStatusCode === 416) {
+        res.status(416).json({ error: 'Requested video byte range is unavailable.' });
+      } else {
+        console.error('Secure movie stream failed:', error);
+        res.status(503).json({ error: 'Secure playback is temporarily unavailable.' });
+      }
+    }
+  };
+
+  app.head('/api/media/stream/:id', handleMovieStream);
+  app.get('/api/media/stream/:id', handleMovieStream);
 
   // Track viewing events (Deduplicated, logs milestones & preview pause)
   app.post('/api/movies/:id/track-view', async (req: AuthenticatedRequest, res: Response) => {
@@ -1458,465 +1807,161 @@ async function startServer() {
 
   // -------------------------------------------------------------
   // MANDATORY PRICING & REAL PAYMENTS (PAYSTACK / WALLET)
-  // ₦100 Movie | ₦700 10-Episode Bundle | 85% Creator / 15% Platform Split
+  // Authoritative amounts and entitlements live in PostgreSQL finance tables.
+  // 100 NGN movie / 700 NGN 10-episode bundle / creator 85%, platform 15%.
   // -------------------------------------------------------------
 
-  // Initialize wallet deposit with Paystack. Secret keys stay on the server.
+  function reportFinanceError(res: Response, error: unknown): void {
+    if (error instanceof PaystackNotConfirmedError) {
+      res.status(402).json({ error: 'Paystack has not confirmed this payment. Please try again later.' });
+    } else if (error instanceof PaystackGatewayError) {
+      res.status(502).json({ error: error.message });
+    } else {
+      const mapped = financeErrorResponse(error);
+      res.status(mapped.status).json({ error: mapped.message });
+    }
+  }
+
+  async function reportWalletPurchaseError(res: Response, error: unknown, userId: string, requiredNgn: number): Promise<void> {
+    const mapped = financeErrorResponse(error);
+    if (mapped.status !== 402) return void reportFinanceError(res, error);
+    try {
+      const balance = await getFinanceStore().getBalance(userId);
+      res.status(402).json({ error: mapped.message, required_ngn: requiredNgn,
+                             current_balance: balance, shortfall_ngn: Math.max(0, requiredNgn - balance) });
+    } catch { reportFinanceError(res, error); }
+  }
+
+  function cleanReference(value: unknown, prefix: string): string | null {
+    return typeof value === 'string' && value.startsWith(prefix) &&
+      /^[A-Za-z0-9_-]{1,120}$/.test(value) ? value : null;
+  }
+
+  // Intent is committed BEFORE redirecting to Paystack. Any confirmation later
+  // (browser retry or signed provider webhook) settles the SAME reference once.
   app.post('/api/wallet/deposit/initialize', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     const amount = Number(req.body?.amount_ngn);
-    if (!Number.isSafeInteger(amount) || amount < 100) {
-      res.status(400).json({ error: 'Minimum deposit amount is ₦100.' });
-      return;
+    if (!Number.isSafeInteger(amount) || amount < 100 || amount > 1000000) {
+      return void res.status(400).json({ error: 'Deposit must be a whole-naira amount between ₦100 and ₦1,000,000.' });
     }
-
-    const secretKey = process.env.PAYSTACK_SECRET_KEY;
-    if (!secretKey) {
-      res.status(503).json({ error: 'Secure payments are temporarily unavailable. Please contact support.' });
-      return;
-    }
-
-    const reference = `VIS_DEP_${Date.now()}_${uuidv4().substring(0, 8).toUpperCase()}`;
-    const callbackUrl = process.env.PAYSTACK_CALLBACK_URL || 'https://visplayapp20.vercel.app/';
+    const reference = 'VIS_DEP_' + Date.now() + '_' + uuidv4().replace(/-/g, '');
     try {
-      const response = await fetch('https://api.paystack.co/transaction/initialize', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${secretKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          email: req.user!.email,
-          amount: amount * 100,
-          currency: 'NGN',
-          reference,
-          callback_url: callbackUrl,
-          metadata: { user_id: req.user!.id, purpose: 'wallet_deposit' },
-        }),
+      await getFinanceStore().createIntent({ userId: req.user!.id, reference, kind: 'wallet_deposit', amount });
+      const authorizationUrl = await initializePaystack({
+        email: req.user!.email, reference, amountNgn: amount, userId: req.user!.id, purpose: 'wallet_deposit',
       });
-      const result = await response.json() as any;
-      if (!response.ok || !result.status || !result.data?.authorization_url) {
-        console.error('Paystack initialization failed:', result?.message || response.status);
-        res.status(502).json({ error: 'Secure checkout could not be started. Please try again.' });
-        return;
-      }
-
-      const db = loadDatabase();
-      const pendingTx: WalletTransaction = {
-        id: `tx_${uuidv4().substring(0, 8)}`,
-        user_id: req.user!.id,
-        amount_ngn: amount,
-        type: 'deposit',
-        status: 'pending',
-        reference,
-        payment_method: 'paystack',
-        description: `Wallet Funding (₦${amount.toLocaleString()})`,
-        metadata: { paystack_access_code: result.data.access_code },
-        created_at: new Date().toISOString(),
-      };
-      db.transactions.push(pendingTx);
-      await saveDatabase(db);
-      res.json({ reference, authorization_url: result.data.authorization_url });
-    } catch (error) {
-      console.error('Paystack initialization error:', error);
-      res.status(502).json({ error: 'Unable to connect to secure checkout. Please try again.' });
-    }
+      res.json({ reference, authorization_url: authorizationUrl });
+    } catch (error) { reportFinanceError(res, error); }
   });
 
-  // Verify against Paystack's server API; never trust a client-supplied reference alone.
   app.post('/api/wallet/deposit/verify', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
-    const reference = String(req.body?.reference || '').trim();
-    if (!reference) {
-      res.status(400).json({ error: 'Transaction reference is required.' });
-      return;
-    }
-    const secretKey = process.env.PAYSTACK_SECRET_KEY;
-    if (!secretKey) {
-      res.status(503).json({ error: 'Secure payments are temporarily unavailable. Please contact support.' });
-      return;
-    }
-
-    const db = loadDatabase();
-    const tx = db.transactions.find(t => t.reference === reference && t.user_id === req.user!.id && t.type === 'deposit');
-    if (!tx) {
-      res.status(404).json({ error: 'Transaction record not found.' });
-      return;
-    }
-    if (tx.status === 'successful') {
-      const currentUser = db.users.find(u => u.id === req.user!.id);
-      res.json({ success: true, already_verified: true, wallet_balance: currentUser?.wallet_balance || 0 });
-      return;
-    }
-
+    const reference = cleanReference(req.body?.reference, 'VIS_DEP_');
+    if (!reference) return void res.status(400).json({ error: 'Valid deposit reference required.' });
     try {
-      const response = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, {
-        headers: { Authorization: `Bearer ${secretKey}` },
-      });
-      const result = await response.json() as any;
-      const payment = result?.data;
-      if (!response.ok || !result?.status || payment?.status !== 'success') {
-        res.status(402).json({ error: 'Payment has not been confirmed yet. Please retry shortly.' });
-        return;
+      const finance = getFinanceStore();
+      const tx = await finance.getIntent(reference, req.user!.id);
+      if (!tx || tx.type !== 'deposit' || tx.payment_method !== 'paystack') {
+        return void res.status(404).json({ error: 'Deposit was not initialized by this account.' });
       }
-      if (payment.reference !== tx.reference || payment.currency !== 'NGN' || Number(payment.amount) !== tx.amount_ngn * 100 ||
-          (payment.metadata?.user_id && payment.metadata.user_id !== req.user!.id)) {
-        res.status(400).json({ error: 'Payment details do not match this wallet deposit.' });
-        return;
+      if (tx.status === 'successful') {
+        return void res.json({ success: true, already_verified: true, wallet_balance: await finance.getBalance(req.user!.id) });
       }
-
-      // Re-check transaction state before crediting to prevent duplicate credits.
-      const latestTx = db.transactions.find(t => t.reference === reference && t.user_id === req.user!.id);
-      if (!latestTx || latestTx.status === 'successful') {
-        const currentUser = db.users.find(u => u.id === req.user!.id);
-        res.json({ success: true, already_verified: true, wallet_balance: currentUser?.wallet_balance || 0 });
-        return;
-      }
-      latestTx.status = 'successful';
-      const user = db.users.find(u => u.id === req.user!.id);
-      if (!user) {
-        res.status(404).json({ error: 'User not found.' });
-        return;
-      }
-      user.wallet_balance = (user.wallet_balance || 0) + latestTx.amount_ngn;
-      db.notifications.push({
-        id: `notif_${uuidv4().substring(0, 8)}`,
-        user_id: user.id,
-        title: 'Wallet Funded Successfully',
-        message: `₦${latestTx.amount_ngn.toLocaleString()} has been credited to your VisPlay wallet.`,
-        is_read: false,
-        created_at: new Date().toISOString(),
-      });
-      await saveDatabase(db);
-      res.json({ success: true, wallet_balance: user.wallet_balance, transaction: latestTx });
-    } catch (error) {
-      console.error('Paystack verification error:', error);
-      res.status(502).json({ error: 'Could not verify payment yet. Please retry shortly.' });
-    }
+      const verified = await verifyPaystackCharge(reference);
+      const result = await finance.settlePaystack(verified);
+      res.json({ success: true, already_verified: result.already_verified === true,
+                 wallet_balance: await finance.getBalance(req.user!.id) });
+    } catch (error) { reportFinanceError(res, error); }
   });
 
-  // Pay directly for one movie through Paystack without crediting the viewer wallet.
   app.post('/api/purchases/movie/initialize', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
-    const movie = loadDatabase().movies.find(m => m.id === req.body?.movie_id && m.status === 'published');
-    if (!movie) return void res.status(404).json({ error: 'Published movie not found.' });
     const db = loadDatabase();
-    const owned = db.purchases.some(p => p.user_id === req.user!.id && (p.item_id === movie.id || (movie.bundle_id && p.item_id === movie.bundle_id)));
+    const movie = db.movies.find(m => m.id === req.body?.movie_id && publiclyVisibleMovie(m) && !m.is_bundle_only);
+    if (!movie) return void res.status(404).json({ error: 'Published individual movie not found.' });
+    const owned = ownsFullMovie(movie, req.user, req.financialPurchases || [], db.creator_profiles);
     if (owned) return void res.json({ already_owned: true, movie_id: movie.id });
-    const price = Number(movie.price_ngn) || 100;
-    const secretKey = process.env.PAYSTACK_SECRET_KEY;
-    if (!secretKey) return void res.status(503).json({ error: 'Direct movie payments are not configured. Please fund your wallet and unlock using your balance.' });
-    const reference = `VIS_MOV_${Date.now()}_${uuidv4().substring(0, 8).toUpperCase()}`;
-    const baseCallback = process.env.PAYSTACK_CALLBACK_URL || 'https://visplayapp20.vercel.app/';
-    const callbackUrl = `${baseCallback}${baseCallback.includes('?') ? '&' : '?'}watch=${encodeURIComponent(movie.id)}`;
+    const reference = 'VIS_MOV_' + Date.now() + '_' + uuidv4().replace(/-/g, '');
     try {
-      const response = await fetch('https://api.paystack.co/transaction/initialize', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${secretKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: req.user!.email, amount: price * 100, currency: 'NGN', reference, callback_url: callbackUrl,
-          metadata: { user_id: req.user!.id, purpose: 'movie_purchase', movie_id: movie.id, movie_title: movie.title },
-        }),
+      await getFinanceStore().createIntent({
+        userId: req.user!.id, reference, kind: 'movie_purchase', amount: 100,
+        itemId: movie.id, creatorId: movie.creator_id, bundleId: movie.bundle_id,
       });
-      const result = await response.json() as any;
-      if (!response.ok || !result.status || !result.data?.authorization_url) return void res.status(502).json({ error: 'Secure movie checkout could not be started. Please try again.' });
-      db.transactions.push({
-        id: `tx_${uuidv4().substring(0, 8)}`, user_id: req.user!.id, amount_ngn: price, type: 'purchase', status: 'pending',
-        reference, payment_method: 'paystack', description: `Direct payment to unlock movie: "${movie.title}"`,
-        metadata: { purpose: 'movie_purchase', movie_id: movie.id, paystack_access_code: result.data.access_code },
-        created_at: new Date().toISOString(),
+      const authorizationUrl = await initializePaystack({
+        email: req.user!.email, reference, amountNgn: 100, userId: req.user!.id,
+        purpose: 'movie_purchase', movieId: movie.id, title: movie.title,
       });
-      await saveDatabase(db);
-      res.json({ reference, authorization_url: result.data.authorization_url, movie_id: movie.id });
-    } catch (error) {
-      console.error('Paystack movie checkout initialization failed:', error);
-      res.status(502).json({ error: 'Unable to connect to secure checkout. Please try again.' });
-    }
+      res.json({ reference, authorization_url: authorizationUrl, movie_id: movie.id });
+    } catch (error) { reportFinanceError(res, error); }
   });
 
   app.post('/api/purchases/movie/verify', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
-    const reference = String(req.body?.reference || '').trim();
-    if (!reference) return void res.status(400).json({ error: 'Transaction reference is required.' });
-    const secretKey = process.env.PAYSTACK_SECRET_KEY;
-    if (!secretKey) return void res.status(503).json({ error: 'Secure payments are temporarily unavailable. Please contact support.' });
-    const db = loadDatabase();
-    const tx = db.transactions.find(t => t.reference === reference && t.user_id === req.user!.id && t.type === 'purchase' && t.metadata?.purpose === 'movie_purchase');
-    if (!tx) return void res.status(404).json({ error: 'Movie payment record not found.' });
-    const movieId = String(tx.metadata?.movie_id || '');
-    const movie = db.movies.find(m => m.id === movieId);
-    if (!movie) return void res.status(404).json({ error: 'The movie associated with this payment was not found.' });
-    const existingPurchase = db.purchases.find(p => p.user_id === req.user!.id && p.item_type === 'movie' && p.item_id === movie.id);
-    if (existingPurchase) {
-      tx.status = 'successful';
-      await saveDatabase(db);
-      return void res.json({ success: true, already_owned: true, movie_id: movie.id, purchase: existingPurchase });
-    }
-    if (tx.status === 'successful') return void res.status(409).json({ error: 'Payment is marked successful but the unlock record is missing. Contact support before paying again.' });
+    const reference = cleanReference(req.body?.reference, 'VIS_MOV_');
+    if (!reference) return void res.status(400).json({ error: 'Valid movie payment reference required.' });
     try {
-      const response = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, { headers: { Authorization: `Bearer ${secretKey}` } });
-      const result = await response.json() as any;
-      const payment = result?.data;
-      if (!response.ok || !result?.status || payment?.status !== 'success') return void res.status(402).json({ error: 'Movie payment has not been confirmed yet. Please retry shortly.' });
-      if (payment.reference !== tx.reference || payment.currency !== 'NGN' || Number(payment.amount) !== tx.amount_ngn * 100 ||
-          (payment.metadata?.user_id && payment.metadata.user_id !== req.user!.id) ||
-          (payment.metadata?.movie_id && payment.metadata.movie_id !== movie.id) ||
-          payment.metadata?.purpose !== 'movie_purchase') {
-        return void res.status(400).json({ error: 'Payment details do not match this movie purchase.' });
+      const finance = getFinanceStore();
+      const tx = await finance.getIntent(reference, req.user!.id);
+      if (!tx || tx.type !== 'purchase' || tx.payment_method !== 'paystack' || tx.metadata?.purpose !== 'movie_purchase') {
+        return void res.status(404).json({ error: 'Movie payment was not initialized by this account.' });
       }
-      const purchase: Purchase = { id: `pur_${uuidv4().substring(0, 8)}`, user_id: req.user!.id, item_type: 'movie', item_id: movie.id, amount_ngn: tx.amount_ngn, reference, created_at: new Date().toISOString() };
-      const creatorShare = Math.round(tx.amount_ngn * 0.85);
-      const platformFee = tx.amount_ngn - creatorShare;
-      const ledgerEntry: CreatorLedger = {
-        id: `led_${uuidv4().substring(0, 8)}`, creator_id: movie.creator_id, purchase_id: purchase.id, movie_id: movie.id,
-        gross_amount_ngn: tx.amount_ngn, creator_share_ngn: creatorShare, platform_fee_ngn: platformFee, status: 'accrued', created_at: new Date().toISOString(),
-      };
-      tx.status = 'successful';
-      db.purchases.push(purchase);
-      db.ledger.push(ledgerEntry);
-      movie.paid_unlocks_count = (movie.paid_unlocks_count || 0) + 1;
-      const viewing = db.viewing_events.find(v => v.user_id === req.user!.id && v.movie_id === movie.id);
-      if (viewing) viewing.converted_to_purchase = true;
-      db.notifications.push({
-        id: `notif_${uuidv4().substring(0, 8)}`, user_id: req.user!.id, title: 'Movie Unlocked!',
-        message: `Payment confirmed. "${movie.title}" is now unlocked for unlimited streaming.`,
-        link: `/watch/${movie.id}`, is_read: false, created_at: new Date().toISOString(),
+      if (tx.status === 'refund_required') {
+        return void res.status(409).json({ error: 'A duplicate payment requires a refund. Our support team must resolve this charge.' });
+      }
+      if (tx.status === 'successful') {
+        const purchase = (await finance.purchases(req.user!.id)).find(p => p.reference === reference);
+        return void res.json({ success: true, already_verified: true, movie_id: tx.metadata?.movie_id, purchase });
+      }
+      const verified = await verifyPaystackCharge(reference);
+      const result = await finance.settlePaystack(verified);
+      if (result.refund_required) return void res.status(409).json({
+        error: 'Payment succeeded but content was already owned. A refund review has been opened; do not pay again.',
       });
-      await saveDatabase(db);
-      res.json({ success: true, movie_id: movie.id, purchase, ledger: ledgerEntry });
-    } catch (error) {
-      console.error('Paystack movie payment verification failed:', error);
-      res.status(502).json({ error: 'Could not verify movie payment. Please retry verification shortly.' });
-    }
+      res.json({ success: true, movie_id: tx.metadata?.movie_id, purchase: result.purchase, ledger: result.ledger });
+    } catch (error) { reportFinanceError(res, error); }
   });
 
-  // Purchase Individual Movie (₦100)
+  // This path is retained for the existing website; the future mobile release
+  // must have store-compliant payment functionality separately reviewed.
   app.post('/api/purchases/buy-movie', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
-    const { movie_id } = req.body;
     const db = loadDatabase();
-    const movie = db.movies.find(m => m.id === movie_id);
-    if (!movie) {
-      res.status(404).json({ error: 'Movie not found.' });
-      return;
-    }
-
-    // Check if already purchased
-    const alreadyPurchased = db.purchases.some(
-      p => p.user_id === req.user!.id && (p.item_id === movie.id || (movie.bundle_id && p.item_id === movie.bundle_id))
-    );
-    if (alreadyPurchased) {
-      res.json({ success: true, message: 'You have already purchased this movie.', already_owned: true });
-      return;
-    }
-
-    const price = movie.price_ngn || 100; // Fixed ₦100
-    const user = db.users.find(u => u.id === req.user!.id);
-    if (!user) {
-      res.status(404).json({ error: 'User not found.' });
-      return;
-    }
-
-    if (user.wallet_balance < price) {
-      res.status(402).json({
-        error: 'Insufficient wallet balance.',
-        required_ngn: price,
-        current_balance: user.wallet_balance,
-        shortfall_ngn: price - user.wallet_balance,
+    const movie = db.movies.find(m => m.id === req.body?.movie_id && publiclyVisibleMovie(m) && !m.is_bundle_only);
+    if (!movie) return void res.status(404).json({ error: 'Published individual movie not found.' });
+    try {
+      const result = await getFinanceStore().buyWallet({
+        userId: req.user!.id, itemType: 'movie', itemId: movie.id,
+        creatorId: movie.creator_id, bundleId: movie.bundle_id,
+        amount: 100, reference: 'VIS_PUR_MOV_' + Date.now() + '_' + uuidv4().replace(/-/g, ''),
       });
-      return;
-    }
-
-    // Server-side deduction
-    user.wallet_balance -= price;
-    const ref = `VIS_PUR_MOV_${Date.now()}_${uuidv4().substring(0, 6).toUpperCase()}`;
-
-    // Record wallet transaction
-    const tx: WalletTransaction = {
-      id: `tx_${uuidv4().substring(0, 8)}`,
-      user_id: user.id,
-      amount_ngn: price,
-      type: 'purchase',
-      status: 'successful',
-      reference: ref,
-      payment_method: 'wallet',
-      description: `Unlocked Movie: "${movie.title}"`,
-      metadata: { movie_id: movie.id, title: movie.title },
-      created_at: new Date().toISOString(),
-    };
-    db.transactions.push(tx);
-
-    // Record Purchase
-    const purchase: Purchase = {
-      id: `pur_${uuidv4().substring(0, 8)}`,
-      user_id: user.id,
-      item_type: 'movie',
-      item_id: movie.id,
-      amount_ngn: price,
-      reference: ref,
-      created_at: new Date().toISOString(),
-    };
-    db.purchases.push(purchase);
-
-    // Revenue Split: 85% Creator, 15% VisPlay Platform
-    const creatorShare = Math.round(price * 0.85); // ₦85
-    const platformFee = price - creatorShare;     // ₦15
-
-    const ledgerEntry: CreatorLedger = {
-      id: `led_${uuidv4().substring(0, 8)}`,
-      creator_id: movie.creator_id,
-      purchase_id: purchase.id,
-      movie_id: movie.id,
-      gross_amount_ngn: price,
-      creator_share_ngn: creatorShare,
-      platform_fee_ngn: platformFee,
-      status: 'accrued',
-      created_at: new Date().toISOString(),
-    };
-    db.ledger.push(ledgerEntry);
-
-    // Update movie stats
-    movie.paid_unlocks_count = (movie.paid_unlocks_count || 0) + 1;
-
-    // Update viewing event conversion if present
-    const viewing = db.viewing_events.find(v => v.user_id === user.id && v.movie_id === movie.id);
-    if (viewing) {
-      viewing.converted_to_purchase = true;
-    }
-
-    // Notification for viewer
-    db.notifications.push({
-      id: `notif_${uuidv4().substring(0, 8)}`,
-      user_id: user.id,
-      title: 'Movie Unlocked!',
-      message: `"${movie.title}" is now unlocked for unlimited streaming. Remaining balance: ₦${user.wallet_balance.toLocaleString()}.`,
-      link: `/watch/${movie.id}`,
-      is_read: false,
-      created_at: new Date().toISOString(),
-    });
-
-    await saveDatabase(db);
-    res.json({
-      success: true,
-      message: `Unlocked "${movie.title}" for ₦${price}. Enjoy the full movie!`,
-      wallet_balance: user.wallet_balance,
-      purchase,
-      ledger: ledgerEntry,
-    });
+      res.json({ success: true, already_owned: Boolean(result.already_owned),
+                 wallet_balance: result.wallet_balance, purchase: result.purchase, ledger: result.ledger });
+    } catch (error) { await reportWalletPurchaseError(res, error, req.user!.id, 100); }
   });
 
-  // Purchase 10-Episode Bundle (₦700 Total)
   app.post('/api/purchases/buy-bundle', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
-    const { bundle_id } = req.body;
     const db = loadDatabase();
-    const bundle = db.bundles.find(b => b.id === bundle_id);
-    if (!bundle) {
-      res.status(404).json({ error: 'Bundle not found.' });
-      return;
+    const bundle = db.bundles.find(b => b.id === req.body?.bundle_id && b.status === 'approved');
+    if (!bundle) return void res.status(404).json({ error: 'Approved bundle not found.' });
+    const episodes = db.movies.filter(m => m.bundle_id === bundle.id && publiclyVisibleMovie(m));
+    if (bundle.episodes_count !== 10 || episodes.length !== 10) {
+      return void res.status(409).json({ error: 'The complete ten-episode bundle is not published.' });
     }
-
-    // Check if already purchased
-    const alreadyPurchased = db.purchases.some(p => p.user_id === req.user!.id && p.item_id === bundle.id);
-    if (alreadyPurchased) {
-      res.json({ success: true, message: 'You already own this 10-episode bundle.', already_owned: true });
-      return;
-    }
-
-    const price = bundle.price_ngn || 700; // Fixed ₦700 for all 10 episodes
-    const user = db.users.find(u => u.id === req.user!.id);
-    if (!user) {
-      res.status(404).json({ error: 'User not found.' });
-      return;
-    }
-
-    if (user.wallet_balance < price) {
-      res.status(402).json({
-        error: 'Insufficient wallet balance for 10-episode bundle.',
-        required_ngn: price,
-        current_balance: user.wallet_balance,
-        shortfall_ngn: price - user.wallet_balance,
+    try {
+      const result = await getFinanceStore().buyWallet({
+        userId: req.user!.id, itemType: 'bundle', itemId: bundle.id, creatorId: bundle.creator_id,
+        amount: 700, reference: 'VIS_PUR_BUN_' + Date.now() + '_' + uuidv4().replace(/-/g, ''),
       });
-      return;
-    }
-
-    user.wallet_balance -= price;
-    const ref = `VIS_PUR_BUN_${Date.now()}_${uuidv4().substring(0, 6).toUpperCase()}`;
-
-    // Wallet transaction
-    const tx: WalletTransaction = {
-      id: `tx_${uuidv4().substring(0, 8)}`,
-      user_id: user.id,
-      amount_ngn: price,
-      type: 'purchase',
-      status: 'successful',
-      reference: ref,
-      payment_method: 'wallet',
-      description: `Unlocked 10-Episode Bundle: "${bundle.title}"`,
-      metadata: { bundle_id: bundle.id, episodes_count: bundle.episodes_count },
-      created_at: new Date().toISOString(),
-    };
-    db.transactions.push(tx);
-
-    // Purchase record
-    const purchase: Purchase = {
-      id: `pur_${uuidv4().substring(0, 8)}`,
-      user_id: user.id,
-      item_type: 'bundle',
-      item_id: bundle.id,
-      amount_ngn: price,
-      reference: ref,
-      created_at: new Date().toISOString(),
-    };
-    db.purchases.push(purchase);
-
-    // Revenue Split: 85% Creator (₦595), 15% VisPlay (₦105)
-    const creatorShare = Math.round(price * 0.85); // ₦595
-    const platformFee = price - creatorShare;     // ₦105
-
-    const ledgerEntry: CreatorLedger = {
-      id: `led_${uuidv4().substring(0, 8)}`,
-      creator_id: bundle.creator_id,
-      purchase_id: purchase.id,
-      bundle_id: bundle.id,
-      gross_amount_ngn: price,
-      creator_share_ngn: creatorShare,
-      platform_fee_ngn: platformFee,
-      status: 'accrued',
-      created_at: new Date().toISOString(),
-    };
-    db.ledger.push(ledgerEntry);
-
-    // Unlock all 10 episodes
-    const episodes = db.movies.filter(m => m.bundle_id === bundle.id);
-    episodes.forEach(ep => {
-      ep.paid_unlocks_count = (ep.paid_unlocks_count || 0) + 1;
-    });
-
-    // Notification
-    db.notifications.push({
-      id: `notif_${uuidv4().substring(0, 8)}`,
-      user_id: user.id,
-      title: '10-Episode Bundle Unlocked!',
-      message: `All 10 episodes of "${bundle.title}" are now unlocked for unlimited viewing! Remaining balance: ₦${user.wallet_balance.toLocaleString()}.`,
-      link: `/bundle/${bundle.id}`,
-      is_read: false,
-      created_at: new Date().toISOString(),
-    });
-
-    await saveDatabase(db);
-    res.json({
-      success: true,
-      message: `Unlocked all 10 episodes of "${bundle.title}" for ₦${price}!`,
-      wallet_balance: user.wallet_balance,
-      purchase,
-      ledger: ledgerEntry,
-    });
+      res.json({ success: true, already_owned: Boolean(result.already_owned),
+                 wallet_balance: result.wallet_balance, purchase: result.purchase, ledger: result.ledger });
+    } catch (error) { await reportWalletPurchaseError(res, error, req.user!.id, 700); }
   });
 
   // User Dashboard: Transactions & Purchased Movies
-  app.get('/api/user/library', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+  app.get('/api/user/library', requireAuth, guardedFinancialRead(async (req: AuthenticatedRequest, res: Response) => {
     const db = loadDatabase();
-    const purchases = db.purchases.filter(p => p.user_id === req.user!.id);
+    const purchases = req.financialPurchases || [];
     const movieIds = purchases.filter(p => p.item_type === 'movie').map(p => p.item_id);
     const bundleIds = purchases.filter(p => p.item_type === 'bundle').map(p => p.item_id);
 
     // Include movies purchased individually + movies in purchased bundles
-    const movies = db.movies.filter(m => movieIds.includes(m.id) || (m.bundle_id && bundleIds.includes(m.bundle_id)));
+    const movies = db.movies.filter(m => movieIds.includes(m.id) || (m.bundle_id && bundleIds.includes(m.bundle_id))).map(toClientMovie);
     const bundles = db.bundles.filter(b => bundleIds.includes(b.id));
     const userEvents = db.viewing_events
       .filter(e => e.user_id === req.user!.id)
@@ -1928,11 +1973,11 @@ async function startServer() {
     const watchHistory = Array.from(latestEventByMovie.values())
       .map(event => {
         const movie = db.movies.find(m => m.id === event.movie_id);
-        return movie ? { ...movie, last_position_seconds: event.last_position_seconds ?? event.duration_watched_seconds ?? 0, last_watched_at: event.created_at, is_purchased: movieIds.includes(movie.id) || Boolean(movie.bundle_id && bundleIds.includes(movie.bundle_id)) } : null;
+        return movie ? { ...toClientMovie(movie), last_position_seconds: event.last_position_seconds ?? event.duration_watched_seconds ?? 0, last_watched_at: event.created_at, is_purchased: movieIds.includes(movie.id) || Boolean(movie.bundle_id && bundleIds.includes(movie.bundle_id)) } : null;
       })
       .filter(Boolean)
       .sort((a: any, b: any) => new Date(b.last_watched_at).getTime() - new Date(a.last_watched_at).getTime());
-    const transactions = db.transactions.filter(t => t.user_id === req.user!.id).reverse();
+    const transactions = await getFinanceStore().transactions(req.user!.id);
     const followedCreators = db.follows
       .filter(f => f.follower_user_id === req.user!.id)
       .map(f => db.creator_profiles.find(cp => cp.id === f.creator_user_id))
@@ -1946,14 +1991,15 @@ async function startServer() {
       followed_creators: followedCreators,
       wallet_balance: req.user!.wallet_balance,
     });
-  });
+  }));
 
   // -------------------------------------------------------------
   // SUPER ADMIN DASHBOARD ROUTES
   // -------------------------------------------------------------
 
-  app.get('/api/admin/metrics', requireAdmin, (req: AuthenticatedRequest, res: Response) => {
+  app.get('/api/admin/metrics', requireAdmin, guardedFinancialRead(async (req: AuthenticatedRequest, res: Response) => {
     const db = loadDatabase();
+    const financeMetrics = await getFinanceStore().adminMetrics();
     const totalUsers = db.users.length;
     const totalCreators = db.creator_profiles.filter(cp => cp.status === 'approved').length;
     const pendingApplications = db.creator_profiles.filter(cp => cp.status === 'pending').length;
@@ -1962,15 +2008,6 @@ async function startServer() {
     const publishedMovies = db.movies.filter(m => m.status === 'published').length;
 
     const totalViews = db.movies.reduce((sum, m) => sum + (m.views_count || 0), 0);
-    const totalPaidUnlocks = db.movies.reduce((sum, m) => sum + (m.paid_unlocks_count || 0), 0);
-
-    const grossSales = db.ledger.reduce((sum, l) => sum + l.gross_amount_ngn, 0);
-    const totalCreatorShare = db.ledger.reduce((sum, l) => sum + l.creator_share_ngn, 0); // 85%
-    const totalPlatformRevenue = db.ledger.reduce((sum, l) => sum + l.platform_fee_ngn, 0); // 15%
-
-    const totalWalletDeposits = db.transactions
-      .filter(t => t.type === 'deposit' && t.status === 'successful')
-      .reduce((sum, t) => sum + t.amount_ngn, 0);
 
     const viewingStats = {
       total_sessions: db.viewing_events.length,
@@ -1988,15 +2025,15 @@ async function startServer() {
         pending_movies: pendingMovies,
         published_movies: publishedMovies,
         total_views: totalViews,
-        total_paid_unlocks: totalPaidUnlocks,
-        gross_sales_ngn: grossSales,
-        creator_share_ngn: totalCreatorShare,
-        platform_revenue_ngn: totalPlatformRevenue,
-        wallet_deposits_ngn: totalWalletDeposits,
+        total_paid_unlocks: financeMetrics.total_paid_unlocks,
+        gross_sales_ngn: financeMetrics.gross_sales_ngn,
+        creator_share_ngn: financeMetrics.creator_share_ngn,
+        platform_revenue_ngn: financeMetrics.platform_revenue_ngn,
+        wallet_deposits_ngn: financeMetrics.wallet_deposits_ngn,
       },
       viewing_stats: viewingStats,
     });
-  });
+  }));
 
   // Admin Creator Applications
   app.get('/api/admin/creator-applications', requireAdmin, (req: AuthenticatedRequest, res: Response) => {
@@ -2072,17 +2109,24 @@ async function startServer() {
   });
 
   // Admin All Movies Table (With Views, Milestones, Sales, 85/15 split)
-  app.get('/api/admin/movies', requireAdmin, (req: AuthenticatedRequest, res: Response) => {
+  app.get('/api/admin/movies', requireAdmin, guardedFinancialRead(async (req: AuthenticatedRequest, res: Response) => {
     const db = loadDatabase();
+    const salesByMovie = await getFinanceStore().movieSales();
     const moviesWithFinancials = db.movies.map(m => {
-      const moviePurchases = db.purchases.filter(p => p.item_id === m.id);
-      const grossSales = moviePurchases.length * m.price_ngn;
-      const creatorShare = Math.round(grossSales * 0.85);
-      const platformFee = grossSales - creatorShare;
+      const totals = salesByMovie[m.id];
+      const grossSales = totals?.gross_sales_ngn || 0;
+      const creatorShare = totals?.creator_share_ngn || 0;
+      const platformFee = totals?.platform_fee_ngn || 0;
       const events = db.viewing_events.filter(e => e.movie_id === m.id);
 
       return {
-        ...m,
+        ...toClientMovie(m),
+        private_master_linked: Boolean(privateVideoKey(m.video_url)),
+        private_preview_linked: Boolean(m.preview_private_key),
+        rights_reviewed: Boolean(m.rights_review),
+        rights_declared: Boolean(m.rights_attestation),
+        content_rating_reviewed: Boolean(m.content_rating_reviewed_at),
+        safety_hold: Boolean(m.safety_hold),
         milestones_5min: events.filter(e => e.reached_5_min).length,
         completed_watches: events.filter(e => e.completed).length,
         gross_sales_ngn: grossSales,
@@ -2092,6 +2136,135 @@ async function startServer() {
     }).reverse();
 
     res.json({ movies: moviesWithFinancials });
+  }));
+
+  // An operator first copies a legacy public video to private R2 (without
+  // deleting its source), then binds the verified new key to the movie here.
+  app.post('/api/admin/movies/:id/attach-private-master', requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+    const db = loadDatabase();
+    const movie = db.movies.find(m => m.id === req.params.id);
+    if (!movie) return void res.status(404).json({ error: 'Movie not found.' });
+    const owner = db.creator_profiles.find(profile => profile.id === movie.creator_id);
+    if (!owner) return void res.status(409).json({ error: 'Movie has no verified creator account owner.' });
+
+    const reference = typeof req.body?.private_video_url === 'string' ? req.body.private_video_url : '';
+    const key = privateVideoKey(reference);
+    if (!key || !key.startsWith(`videos/${owner.user_id}/`)) {
+      return void res.status(400).json({ error: 'Master must have a private key scoped to this creator.' });
+    }
+    if (db.movies.some(other => other.id !== movie.id && other.video_url === reference)) {
+      return void res.status(409).json({ error: 'Another movie already references this master object.' });
+    }
+
+    try {
+      const object = await getR2Client().send(new HeadObjectCommand({ Bucket: privateVideoBucket(), Key: key }));
+      if (!object.ContentLength || object.ContentLength > 500 * 1024 * 1024 || object.ContentType?.split(';')[0] !== 'video/mp4') {
+        return void res.status(409).json({ error: 'Private video failed file size or MP4 metadata validation.' });
+      }
+      movie.video_url = reference;
+      // A new master requires a new preview. Never attach the old preview to
+      // a different full video, even when the movie ID stays the same.
+      movie.preview_private_key = undefined;
+      db.audit_logs.push({
+        id: `aud_${uuidv4().substring(0, 8)}`,
+        admin_id: req.user!.id, admin_name: req.user!.full_name,
+        action: 'ATTACH_PRIVATE_MOVIE_MASTER', target_type: 'movie', target_id: movie.id,
+        details: 'Verified and attached a private movie master; preview reset for regeneration.',
+        created_at: new Date().toISOString(),
+      });
+      await saveDatabase(db);
+      res.json({ success: true, movie_id: movie.id, master_ready: true, preview_ready: false });
+    } catch (error) {
+      console.error('Private master attachment failed:', error);
+      res.status(503).json({ error: 'Could not verify the private video master.' });
+    }
+  });
+
+  // A dedicated preview-generation worker uploads a verified <=300s MP4 to a
+  // private object key with movieid metadata. An administrator attaches that
+  // asset only after validating the exact movie/key relationship.
+  app.post('/api/admin/movies/:id/attach-preview', requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+    const db = loadDatabase();
+    const movie = db.movies.find(m => m.id === req.params.id);
+    if (!movie) return void res.status(404).json({ error: 'Movie not found.' });
+
+    const previewKey = typeof req.body?.preview_private_key === 'string' ? req.body.preview_private_key : '';
+    if (!/^previews\/[A-Za-z0-9_-]+\/[a-f0-9-]{32,}\.mp4$/i.test(previewKey) || !previewKey.startsWith(`previews/${movie.id}/`)) {
+      return void res.status(400).json({ error: 'Invalid private preview key for this movie.' });
+    }
+
+    try {
+      const head = await getR2Client().send(new HeadObjectCommand({ Bucket: privateVideoBucket(), Key: previewKey }));
+      if (!head.ContentLength || head.ContentLength > 250 * 1024 * 1024 || head.ContentType?.split(';')[0] !== 'video/mp4' || head.Metadata?.movieid !== movie.id) {
+        return void res.status(409).json({ error: 'Preview file failed ownership/type/size validation.' });
+      }
+      movie.preview_private_key = previewKey;
+      db.audit_logs.push({
+        id: `aud_${uuidv4().substring(0, 8)}`,
+        admin_id: req.user!.id,
+        admin_name: req.user!.full_name,
+        action: 'ATTACH_SECURE_MOVIE_PREVIEW',
+        target_type: 'movie', target_id: movie.id,
+        details: 'Verified and attached a private preview asset.',
+        created_at: new Date().toISOString(),
+      });
+      await saveDatabase(db);
+      res.json({ success: true, movie_id: movie.id, preview_ready: true });
+    } catch (error) {
+      console.error('Private preview attachment failed:', error);
+      res.status(503).json({ error: 'Could not validate the private preview object.' });
+    }
+  });
+
+  // A human reviewer must classify audience suitability. Adult-rated videos
+  // are blocked until a separate age-assurance program exists (Section I).
+  app.post('/api/admin/movies/:id/content-rating', requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const db = loadDatabase();
+      const movie = db.movies.find(item => item.id === req.params.id);
+      if (!movie) return void res.status(404).json({ error: 'Movie not found.' });
+      if (movie.status === 'published' && !movie.safety_hold) return void res.status(409).json({ error: 'Published film content classification needs a separately approved re-review.' });
+      if (!CONTENT_RATINGS.includes(req.body?.content_rating)) throw new SafetyInputError('Select a valid audience content rating.');
+      const notes = limitedText(req.body?.review_notes, 1000, 'Content review notes', 20);
+      movie.content_rating = req.body.content_rating;
+      movie.content_rating_reviewed_at = new Date().toISOString();
+      db.audit_logs.push({ id: `aud_${uuidv4()}`, admin_id: req.user!.id, admin_name: req.user!.full_name,
+        action: 'VERIFY_CONTENT_RATING', target_type: 'movie', target_id: movie.id,
+        details: `Content rating: ${movie.content_rating}; review evidence: ${notes}`, created_at: movie.content_rating_reviewed_at });
+      await saveDatabase(db);
+      res.json({ success: true, content_rating: movie.content_rating });
+    } catch (error) {
+      if (error instanceof SafetyInputError) return void res.status(error.status).json({ error: error.message });
+      res.status(503).json({ error: 'Content rating could not be saved.' });
+    }
+  });
+
+  // Human rights clearance is separate from the creator's declaration.
+  // The employer must verify source licences/contracts OFFLINE before submitting.
+  app.post('/api/admin/movies/:id/rights-review', requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const db = loadDatabase();
+      const movie = db.movies.find(item => item.id === req.params.id);
+      if (!movie) return void res.status(404).json({ error: 'Movie not found.' });
+      const rightsCreator = db.creator_profiles.find(profile => profile.id === movie.creator_id);
+      if (rightsCreator?.user_id === req.user!.id) return void res.status(403).json({ error: 'Your own film needs a different independent rights reviewer.' });
+      if (movie.status === 'published' && !movie.safety_hold) return void res.status(409).json({ error: 'Published movies may be re-reviewed only while under an active safety hold.' });
+      if (pendingRightsComplaint(db, movie.id)) return void res.status(409).json({ error: 'Unresolved copyright complaint requires specialist review.' });
+      const basis = req.body?.verification_basis;
+      if (!['original', 'licence', 'written_authorization', 'other'].includes(basis)) throw new SafetyInputError('Choose the source of the checked rights documents.');
+      const reference = limitedText(req.body?.evidence_reference, 200, 'Document or contract reference', 5);
+      const notes = limitedText(req.body?.review_notes, 1000, 'Human rights review notes', 20);
+      movie.rights_review = { reviewed_at: new Date().toISOString(), reviewer_user_id: req.user!.id,
+        verification_basis: basis, evidence_reference: reference, review_notes: notes };
+      db.audit_logs.push({ id: `aud_${uuidv4()}`, admin_id: req.user!.id, admin_name: req.user!.full_name,
+        action: 'VERIFY_MOVIE_RIGHTS', target_type: 'movie', target_id: movie.id,
+        details: `Rights reviewed from ${basis}; document reference: ${reference}; notes: ${notes}`, created_at: movie.rights_review.reviewed_at });
+      await saveDatabase(db);
+      res.json({ success: true, rights_reviewed_at: movie.rights_review.reviewed_at });
+    } catch (error) {
+      if (error instanceof SafetyInputError) return void res.status(error.status).json({ error: error.message });
+      res.status(503).json({ error: 'Rights review could not be saved.' });
+    }
   });
 
   // Admin Movie Moderation
@@ -2102,6 +2275,51 @@ async function startServer() {
     if (!movie) {
       res.status(404).json({ error: 'Movie not found.' });
       return;
+    }
+
+    if (action !== 'approve' && action !== 'publish' && action !== 'reject') {
+      res.status(400).json({ error: 'Invalid moderation action.' });
+      return;
+    }
+
+    if (action === 'approve' || action === 'publish') {
+      if (!movie.content_rating || !movie.content_rating_reviewed_at) {
+        return void res.status(409).json({ error: 'A human-reviewed content/age rating is required before publication.' });
+      }
+      if (movie.content_rating === 'ADULT') {
+        return void res.status(409).json({ error: 'Adult-rated films require age assurance and territory approval before publication.' });
+      }
+      const creatorProfile = db.creator_profiles.find(profile => profile.id === movie.creator_id);
+      if (movie.safety_hold || creatorProfile?.safety_restricted || pendingRightsComplaint(db, movie.id)) {
+        return void res.status(409).json({ error: 'An unresolved safety or rights hold prevents publication.' });
+      }
+      if (!movie.rights_review) {
+        return void res.status(409).json({ error: 'Independent rights review must be recorded before publication.' });
+      }
+      if (!movie.rights_attestation && !movie.rights_review.evidence_reference) {
+        return void res.status(409).json({ error: 'Legacy movie requires verified original rights evidence.' });
+      }
+      const fullKey = privateVideoKey(movie.video_url);
+      const previewKey = movie.preview_private_key;
+      if (!fullKey || !previewKey || !/^previews\/[A-Za-z0-9_-]+\/[a-f0-9-]{32,}\.mp4$/i.test(previewKey)) {
+        res.status(409).json({ error: 'Private master video and verified five-minute preview are required before publication.' });
+        return;
+      }
+      try {
+        const bucket = privateVideoBucket();
+        const [master, preview] = await Promise.all([
+          getR2Client().send(new HeadObjectCommand({ Bucket: bucket, Key: fullKey })),
+          getR2Client().send(new HeadObjectCommand({ Bucket: bucket, Key: previewKey })),
+        ]);
+        if (!master.ContentLength || !preview.ContentLength || preview.Metadata?.movieid !== movie.id) {
+          res.status(409).json({ error: 'Secure media verification failed; the movie was not published.' });
+          return;
+        }
+      } catch (error) {
+        console.error('Failed to verify private media for publication:', error);
+        res.status(503).json({ error: 'Private storage is temporarily unavailable. The movie was not published.' });
+        return;
+      }
     }
 
     const wasPublished = movie.status === 'published';
@@ -2137,7 +2355,7 @@ async function startServer() {
     }
 
     // Notify every follower when a creator's film becomes public, including a direct movie link.
-    if (movie.status === 'published' && creator) {
+    if (movie.status === 'published' && !wasPublished && creator) {
       const followerIds = [...new Set(db.follows.filter(f => f.creator_user_id === creator.id).map(f => f.follower_user_id))];
       for (const followerId of followerIds) {
         if (followerId === creator.user_id) continue;
@@ -2153,24 +2371,8 @@ async function startServer() {
       }
     }
 
-    if (movie.status === 'published' && !wasPublished && creator) {
-      const followerIds = [...new Set(db.follows.filter(f => f.creator_user_id === creator.id).map(f => f.user_id))];
-      for (const followerId of followerIds) {
-        if (followerId === creator.user_id) continue;
-        db.notifications.push({
-          id: `notif_${uuidv4().substring(0, 8)}`,
-          user_id: followerId,
-          title: `${creator.channel_name} posted a new movie`,
-          message: `Now available: "${movie.title}". Tap to watch the 5-minute preview.`,
-          link: `/?watch=${encodeURIComponent(movie.id)}`,
-          is_read: false,
-          created_at: new Date().toISOString(),
-        });
-      }
-    }
-
     await saveDatabase(db);
-    res.json({ success: true, movie, message: `Movie status set to ${movie.status}.` });
+    res.json({ success: true, movie: toClientMovie(movie), message: `Movie status set to ${movie.status}.` });
   });
 
   // Delete a movie: creators may remove only their own movies; super admins may remove any movie.
@@ -2193,6 +2395,18 @@ async function startServer() {
       return;
     }
 
+    // Purchased access and creator earnings are durable obligations. A rights
+    // dispute may unpublish a movie, but cannot silently destroy paid content.
+    try {
+      const finance = getFinanceStore();
+      const sold = await finance.hasPurchasedItem('movie', movie.id) ||
+        Boolean(movie.bundle_id && await finance.hasPurchasedItem('bundle', movie.bundle_id));
+      if (sold) return void res.status(409).json({ error: 'This movie has paid viewers. Unpublish it and arrange a reviewed refund or rights-transfer plan before permanent deletion.' });
+    } catch (error) {
+      const mapped = financeErrorResponse(error);
+      return void res.status(mapped.status).json({ error: mapped.message });
+    }
+
     // Remove this movie's R2 objects when possible; catalogue deletion still works if cleanup fails.
     try {
       const publicBase = process.env.R2_PUBLIC_BASE_URL?.replace(/\/+$/, '');
@@ -2203,6 +2417,12 @@ async function startServer() {
       const uniqueKeys = [...new Set(objectKeys)];
       if (uniqueKeys.length && isR2Configured()) {
         await getR2Client().send(new DeleteObjectsCommand({ Bucket: MEDIA_BUCKET, Delete: { Objects: uniqueKeys.map(Key => ({ Key })) } }));
+      }
+      const privateKeys = [privateVideoKey(movie.video_url), movie.preview_private_key].filter((key): key is string => Boolean(key));
+      if (privateKeys.length) {
+        await getR2Client().send(new DeleteObjectsCommand({
+          Bucket: privateVideoBucket(), Delete: { Objects: privateKeys.map(Key => ({ Key })) },
+        }));
       }
     } catch (storageError) {
       console.error('Movie media cleanup failed:', storageError);
@@ -2244,26 +2464,32 @@ async function startServer() {
   });
 
   // Admin Users List
-  app.get('/api/admin/users', requireAdmin, (req: AuthenticatedRequest, res: Response) => {
+  app.get('/api/admin/users', requireAdmin, guardedFinancialRead(async (req: AuthenticatedRequest, res: Response) => {
     const db = loadDatabase();
-    const users = db.users.map(({ password_hash: _, ...u }) => u);
+    const balances = await getFinanceStore().getBalances(db.users.map(user => user.id));
+    const users = db.users.map(({ password_hash: _, supabase_auth_id: _authId, ...u }) => ({
+      ...u, wallet_balance: balances.get(u.id) || 0,
+    }));
     res.json({ users });
-  });
+  }));
 
   // Admin All Financial Transactions
-  app.get('/api/admin/transactions', requireAdmin, (req: AuthenticatedRequest, res: Response) => {
+  app.get('/api/admin/transactions', requireAdmin, guardedFinancialRead(async (req: AuthenticatedRequest, res: Response) => {
     const db = loadDatabase();
-    const transactions = db.transactions.map(t => {
+    const [allTransactions, ledger, refundCases] = await Promise.all([
+      getFinanceStore().adminTransactions(), getFinanceStore().adminLedger(), getFinanceStore().refundCases(),
+    ]);
+    const transactions = allTransactions.map(t => {
       const user = db.users.find(u => u.id === t.user_id);
       return {
         ...t,
         user_name: user?.full_name || 'Unknown',
         user_email: user?.email || '',
       };
-    }).reverse();
+    });
 
-    res.json({ transactions, ledger: db.ledger.slice(-50).reverse() });
-  });
+    res.json({ transactions, ledger: ledger.slice(0, 50), refund_cases: refundCases.filter(refund => refund.status !== 'refunded') });
+  }));
 
   // Admin Audit Logs
   app.get('/api/admin/audit-logs', requireAdmin, (req: AuthenticatedRequest, res: Response) => {
@@ -2272,18 +2498,18 @@ async function startServer() {
   });
 
   // Admin Creator Monthly Payouts
-  app.get('/api/admin/payouts', requireAdmin, (req: AuthenticatedRequest, res: Response) => {
+  app.get('/api/admin/payouts', requireAdmin, guardedFinancialRead(async (req: AuthenticatedRequest, res: Response) => {
     const db = loadDatabase();
-    const payouts = db.payouts.map(p => {
+    const payouts = (await getFinanceStore().adminPayouts()).map(p => {
       const creator = db.creator_profiles.find(cp => cp.id === p.creator_id);
       return {
         ...p,
         channel_name: creator?.channel_name || 'Channel',
       };
-    }).reverse();
+    });
 
     res.json({ payouts });
-  });
+  }));
 
   // This endpoint records a pending payout request only. It never claims a bank transfer happened.
   app.post('/api/admin/payouts/process', requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
@@ -2295,36 +2521,14 @@ async function startServer() {
       return;
     }
 
-    if (db.payouts.some(p => p.creator_id === creator_id && p.status === 'pending')) {
-      res.status(409).json({ error: 'A pending payout request already exists for this creator.' });
-      return;
+    let payout: CreatorPayout;
+    try {
+      payout = await getFinanceStore().reservePayout(creator_id, typeof month_period === 'string' && month_period.trim()
+        ? month_period.trim() : new Date().toLocaleDateString('en-NG', { month: 'long', year: 'numeric' }), req.user!.id);
+    } catch (error) {
+      const mapped = financeErrorResponse(error);
+      return void res.status(mapped.status).json({ error: mapped.message });
     }
-
-    const accruedLedger = db.ledger.filter(l => l.creator_id === creator_id && l.status === 'accrued');
-    if (accruedLedger.length === 0) {
-      res.status(400).json({ error: 'No accrued earnings to request for this creator.' });
-      return;
-    }
-
-    const grossTotal = accruedLedger.reduce((sum, l) => sum + l.gross_amount_ngn, 0);
-    const platformFee = accruedLedger.reduce((sum, l) => sum + l.platform_fee_ngn, 0);
-    const netPayout = accruedLedger.reduce((sum, l) => sum + l.creator_share_ngn, 0);
-
-    const payout: CreatorPayout = {
-      id: `pay_${uuidv4().substring(0, 8)}`,
-      creator_id,
-      month_period: typeof month_period === 'string' && month_period.trim() ? month_period.trim() : new Date().toLocaleDateString('en-NG', { month: 'long', year: 'numeric' }),
-      total_earnings_ngn: grossTotal,
-      platform_fee_ngn: platformFee,
-      net_payout_ngn: netPayout,
-      status: 'pending',
-      bank_name: '',
-      account_number: '',
-      account_name: '',
-      created_at: new Date().toISOString(),
-    };
-
-    db.payouts.push(payout);
     db.audit_logs.push({
       id: `aud_${uuidv4().substring(0, 8)}`,
       admin_id: req.user!.id,
@@ -2332,11 +2536,11 @@ async function startServer() {
       action: 'CREATE_PENDING_PAYOUT_REQUEST',
       target_type: 'payout',
       target_id: payout.id,
-      details: `Recorded a pending payout request for ₦${netPayout.toLocaleString()} to creator ${creator.channel_name}. No bank transfer was made.`,
+      details: `Reserved accrued earnings for payout ${payout.id}. No bank transfer was made.`,
       created_at: new Date().toISOString(),
     });
 
-    await saveDatabase(db);
+    try { await saveDatabase(db); } catch (error) { console.warn('Pending payout audit-log mirroring failed:', error); }
     res.status(201).json({ success: true, payout, message: `Payout request recorded as pending for ${creator.channel_name}. No bank transfer was sent.` });
   });
 
@@ -2344,42 +2548,21 @@ async function startServer() {
   // LIVESTREAMS, PREMIERES, REWARDS & ADS
   // -------------------------------------------------------------
 
-  app.get('/api/livestreams', (req: Request, res: Response) => {
-    const db = loadDatabase();
-    res.json({ livestreams: db.livestreams });
+  // Legacy creator live streams were arbitrary, unreviewed external URLs.
+  // Preserve the old records privately for migration, but do NOT expose them
+  // or accept new live content before H provisions an approved moderation-
+  // capable live ingestion/relay system and human escalation staff.
+  app.get('/api/livestreams', (_req: Request, res: Response) => {
+    res.json({ livestreams: [], live_streaming_available: false });
   });
-
-  app.post('/api/livestreams', requireCreator, async (req: AuthenticatedRequest, res: Response) => {
-    const { title, description, scheduled_at, stream_url } = req.body;
-    if (!title) {
-      res.status(400).json({ error: 'Livestream title is required.' });
-      return;
-    }
-
-    const db = loadDatabase();
-    const creator = db.creator_profiles.find(cp => cp.user_id === req.user!.id);
-    const newStream: Livestream = {
-      id: `live_${uuidv4().substring(0, 8)}`,
-      creator_id: creator ? creator.id : 'creator_01',
-      creator_name: creator ? creator.channel_name : req.user!.full_name,
-      creator_avatar: creator ? creator.channel_avatar_url : req.user!.avatar_url,
-      title: title.trim(),
-      description: description ? description.trim() : '',
-      scheduled_at: scheduled_at || new Date().toISOString(),
-      status: 'live',
-      stream_url: stream_url || 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
-      viewer_count: 1,
-      created_at: new Date().toISOString(),
-    };
-
-    db.livestreams.unshift(newStream);
-    await saveDatabase(db);
-    res.status(201).json({ livestream: newStream });
+  app.post('/api/livestreams', requireCreator, (_req: AuthenticatedRequest, res: Response) => {
+    res.status(503).json({ error: 'Live creator streaming is paused pending monitored ingestion and safety review.' });
   });
 
   app.get('/api/premieres', (req: Request, res: Response) => {
     const db = loadDatabase();
-    res.json({ premieres: db.premieres });
+    const publicIds = new Set(db.movies.filter(publiclyVisibleMovie).map(movie => movie.id));
+    res.json({ premieres: db.premieres.filter(premiere => publicIds.has(premiere.movie_id)) });
   });
 
   // Wallet reward claims are intentionally disabled. Rewards previously credited
@@ -2409,6 +2592,23 @@ async function startServer() {
   app.get('/api/ads', (req: Request, res: Response) => {
     const db = loadDatabase();
     res.json({ ads: db.ads.filter(a => a.status === 'active') });
+  });
+
+  // Reject unexpected file bodies and malformed upload forms with a small
+  // public error. Do not return middleware internals or stack traces to users.
+  app.use((error: Error, req: Request, res: Response, next: NextFunction) => {
+    if (!req.path.startsWith('/api/')) return next(error);
+    if (res.headersSent) return next(error);
+    if (error instanceof AppStateConflictError) {
+      return void res.status(409).json({ error: 'Someone updated this item at the same time. Refresh and try again.' });
+    }
+    const uploadFormError = error instanceof multer.MulterError;
+    const badJson = error instanceof SyntaxError && 'body' in error;
+    console.warn('VisPlay API request rejected by middleware:', uploadFormError ? error.code : error.name);
+    res.status(uploadFormError || badJson ? 400 : 500).json({
+      error: uploadFormError ? 'Unexpected file body or oversized form fields. Upload media privately first.' :
+        badJson ? 'Malformed JSON request.' : 'The request could not be processed safely.',
+    });
   });
 
   // -------------------------------------------------------------

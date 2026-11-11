@@ -2,7 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { Movie, CreatorProfile } from '../types';
 import { WatchPlayer } from '../components/WatchPlayer';
 import { MovieCard } from '../components/MovieCard';
-import { ArrowLeft, Film, AlertCircle } from 'lucide-react';
+import { ArrowLeft, Film, AlertCircle, BookmarkPlus, Clapperboard } from 'lucide-react';
+import { isNativeReaderEmbed } from '../lib/distribution';
+import { sendNativeReaderMessage } from '../lib/native-bridge';
 
 interface WatchPageProps {
   movieId: string;
@@ -93,6 +95,17 @@ export const WatchPage: React.FC<WatchPageProps> = ({
         onSelectMovie={onSelectMovie}
         onSelectCreator={onSelectCreator}
       />
+
+      {isNativeReaderEmbed() && (
+        <div className="mx-3 flex flex-wrap gap-3 sm:mx-6" aria-label="Native reader features">
+          <button type="button" onClick={() => sendNativeReaderMessage({ type: 'OPEN_PREVIEW', movieId: movie.id, title: movie.title })} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-cyan-400/50 bg-cyan-500/15 px-4 py-3 text-xs font-bold text-cyan-100 focus-visible:outline-2 focus-visible:outline-cyan-300">
+            <Clapperboard className="h-4 w-4" /> Play preview in native player
+          </button>
+          <button type="button" onClick={() => sendNativeReaderMessage({ type: 'SAVE_FILM', movieId: movie.id, title: movie.title })} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-slate-600 bg-slate-800 px-4 py-3 text-xs font-semibold text-slate-100 focus-visible:outline-2 focus-visible:outline-cyan-300">
+            <BookmarkPlus className="h-4 w-4" /> Save to this device
+          </button>
+        </div>
+      )}
 
       {/* Related Movies from the Creator */}
       {relatedMovies.length > 0 && (

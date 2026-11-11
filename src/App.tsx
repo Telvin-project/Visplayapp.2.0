@@ -4,6 +4,7 @@ import { Navbar } from './components/Navbar';
 import { AuthModal } from './components/AuthModal';
 import { WalletDepositModal } from './components/WalletDepositModal';
 import { CreatorApplicationModal } from './components/CreatorApplicationModal';
+import { isMobileReader, isNativeReaderEmbed } from './lib/distribution';
 
 // Pages
 import { HomePage } from './pages/HomePage';
@@ -16,12 +17,13 @@ import { CreatorChannelPage } from './pages/CreatorChannelPage';
 import { CreatorsDirectoryPage } from './pages/CreatorsDirectoryPage';
 import { LivePremieresPage } from './pages/LivePremieresPage';
 import { NotificationsPage } from './pages/NotificationsPage';
+import { SafetyCenterPage } from './pages/SafetyCenterPage';
 
 const AppContent: React.FC = () => {
   const { user, openAuthModal, openCreatorApplyModal } = useAuth();
+  const readerMode = isMobileReader();
   const [currentView, setCurrentView] = useState<string>('home');
   const [selectedMovieId, setSelectedMovieId] = useState<string>('mov_lagos_syndicate');
-  const [moviePaymentRefresh, setMoviePaymentRefresh] = useState(0);
   const [selectedCreatorId, setSelectedCreatorId] = useState<string>('creator_01');
   const [selectedBundleId, setSelectedBundleId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -60,12 +62,31 @@ const AppContent: React.FC = () => {
       const movieId = (event as CustomEvent<{ movieId?: string }>).detail?.movieId;
       if (!movieId) return;
       setSelectedMovieId(movieId);
-      setMoviePaymentRefresh(version => version + 1);
       setCurrentView('watch');
       window.scrollTo({ top: 0, behavior: 'smooth' });
     };
     window.addEventListener('visplay-movie-payment-complete', handleMoviePaymentComplete);
     return () => window.removeEventListener('visplay-movie-payment-complete', handleMoviePaymentComplete);
+  }, []);
+
+  // Native reader navigation is an allowlisted UI event; it never grants access.
+  useEffect(() => {
+    if (!isNativeReaderEmbed()) return;
+    const allowed = new Set(['home', 'bundles', 'creators', 'library', 'profile', 'safety']);
+    const onNativeNavigate = (event: Event) => {
+      const detail = (event as CustomEvent<{ view?: string; movieId?: string }>).detail;
+      if (detail?.view === 'watch' && typeof detail.movieId === 'string' && /^[A-Za-z0-9_-]{1,120}$/.test(detail.movieId)) {
+        setSelectedMovieId(detail.movieId);
+        setCurrentView('watch');
+      } else if (detail?.view && allowed.has(detail.view)) {
+        setCurrentView(detail.view);
+      } else {
+        return;
+      }
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+    window.addEventListener('visplay-native:navigate', onNativeNavigate);
+    return () => window.removeEventListener('visplay-native:navigate', onNativeNavigate);
   }, []);
 
   // Keep in-app navigation in browser history so Back returns to the previous VisPlay page.
@@ -136,6 +157,7 @@ const AppContent: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#06080d] text-slate-100 flex flex-col font-sans selection:bg-cyan-500/30 selection:text-cyan-200">
+      <a href="#visplay-main" className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[100] focus:rounded-lg focus:bg-cyan-300 focus:px-4 focus:py-3 focus:font-bold focus:text-slate-950">Skip to main content</a>
       {/* Universal Top Bar Navigation */}
       <Navbar
         currentView={currentView}
@@ -156,7 +178,7 @@ const AppContent: React.FC = () => {
       )}
 
       {/* Main Viewport Container */}
-      <main className={`flex-1 w-full mx-auto ${currentView === 'watch' ? 'px-0 pt-0' : currentView === 'notifications' ? 'px-2 sm:px-5 lg:px-8 pt-3 sm:pt-6' : 'px-3 sm:px-5 lg:px-8 pt-4 sm:pt-6'} pb-20 md:pb-12`}>
+      <main id="visplay-main" tabIndex={-1} className={`flex-1 w-full mx-auto ${currentView === 'watch' ? 'px-0 pt-0' : currentView === 'notifications' ? 'px-2 sm:px-5 lg:px-8 pt-3 sm:pt-6' : 'px-3 sm:px-5 lg:px-8 pt-4 sm:pt-6'} ${isNativeReaderEmbed() ? 'pb-6' : 'pb-20 md:pb-12'}`}>
         {currentView === 'home' && (
           <HomePage
             onSelectMovie={handleSelectMovie}
@@ -168,7 +190,6 @@ const AppContent: React.FC = () => {
 
         {currentView === 'watch' && (
           <WatchPage
-            key={`${selectedMovieId}:${moviePaymentRefresh}`}
             movieId={selectedMovieId}
             onBack={() => setCurrentView('home')}
             onSelectMovie={handleSelectMovie}
@@ -187,6 +208,8 @@ const AppContent: React.FC = () => {
         {currentView === 'notifications' && (
           <NotificationsPage onSelectMovie={handleSelectMovie} onBack={() => setCurrentView('home')} />
         )}
+
+        {currentView === 'safety' && <SafetyCenterPage />}
 
         {currentView === 'live' && (
           <LivePremieresPage onSelectMovie={handleSelectMovie} />
@@ -207,11 +230,13 @@ const AppContent: React.FC = () => {
           />
         )}
 
-        <div className={currentView === 'studio' ? 'contents' : 'hidden'} aria-hidden={currentView !== 'studio'}>
-          <CreatorStudioPage onSelectMovie={handleSelectMovie} />
-        </div>
+        {!readerMode && (
+          <div className={currentView === 'studio' ? 'contents' : 'hidden'} aria-hidden={currentView !== 'studio'}>
+            <CreatorStudioPage onSelectMovie={handleSelectMovie} />
+          </div>
+        )}
 
-        {currentView === 'admin' && (
+        {!readerMode && currentView === 'admin' && (
           <SuperAdminDashboard onSelectMovie={handleSelectMovie} />
         )}
 
@@ -220,33 +245,42 @@ const AppContent: React.FC = () => {
             onSelectMovie={handleSelectMovie}
             onSelectCreator={handleSelectCreator}
             onSelectBundle={handleSelectBundle}
+            requestedTab={currentView === 'profile' ? 'profile' : 'library'}
           />
         )}
       </main>
 
       {/* Global Modals */}
       <AuthModal />
-      <WalletDepositModal />
-      <CreatorApplicationModal />
+      {!readerMode && <WalletDepositModal />}
+      {!readerMode && <CreatorApplicationModal />}
 
       {/* Quiet Cinematic Footer */}
-      <footer className="border-t border-slate-800/80 bg-[#07090e] py-8 px-4 sm:px-6 lg:px-8 text-xs text-slate-400 mt-auto">
+      {!isNativeReaderEmbed() && <footer className="border-t border-slate-800/80 bg-[#07090e] py-8 px-4 sm:px-6 lg:px-8 text-xs text-slate-400 mt-auto">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
           <div className="flex flex-col sm:flex-row items-center gap-3 text-center sm:text-left">
             <img src="/visplay-logo.png" alt="VisPlay" className="h-7 w-auto object-contain" />
             <span className="hidden sm:inline text-slate-600">|</span>
-            <span className="text-slate-300 font-medium">Great Movies. Small Coins. Big Entertainment.</span>
+            <span className="text-slate-300 font-medium">{readerMode ? 'Great movies, wherever you are.' : 'Great Movies. Small Coins. Big Entertainment.'}</span>
           </div>
 
           <div className="flex flex-wrap items-center justify-center gap-3 text-[11px] text-slate-400">
-            <span>₦100 per movie</span>
+            <span>{readerMode ? 'Watch your library and free previews' : '₦100 per movie'}</span>
             <span>·</span>
             <span>5-minute free preview</span>
             <span>·</span>
             <span>Visibyl Technologies</span>
           </div>
         </div>
-      </footer>
+        <div className="mx-auto mt-5 flex max-w-7xl flex-wrap justify-center gap-5 text-[11px] text-slate-400">
+          <button className="hover:text-cyan-300 underline underline-offset-4" onClick={() => { setCurrentView('safety'); window.scrollTo({ top: 0 }); }}>Safety & Report Center</button>
+          {readerMode ? (
+            <button className="hover:text-cyan-300 underline underline-offset-4" onClick={() => { setCurrentView('profile'); window.scrollTo({ top: 0 }); }}>Delete account in Settings</button>
+          ) : (
+            <a className="hover:text-cyan-300 underline underline-offset-4" href="/account-deletion.html">Account deletion</a>
+          )}
+        </div>
+      </footer>}
     </div>
   );
 };

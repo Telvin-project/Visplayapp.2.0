@@ -1,0 +1,10 @@
+node_modules/
+.expo/
+dist/
+.env
+.env.local
+.env.*.local
+*.jks
+*.p12
+*.mobileprovision
+*.keystore
